@@ -307,6 +307,187 @@ export async function getGroupTotals(rangeSeconds: number): Promise<MetricRow[]>
 }
 
 // ---------------------------------------------------------------------------
+// Thruput introspection — per-destination, per-source/worker-process series
+// ---------------------------------------------------------------------------
+
+function demoSeededJitter(seed: string, end: number): number {
+  let h = 0;
+  for (const c of seed) h = (h * 31 + c.charCodeAt(0)) % 997;
+  return 0.75 + 0.5 * Math.abs(Math.sin(end / 977 + h));
+}
+
+/** Synthetic per-bucket rows split by `dim`, one ramping rate per id. */
+function demoSplitRows(
+  ids: string[],
+  dim: string,
+  rangeSeconds: number,
+  bucketSeconds: number,
+  perSecBase: number,
+  alias: string,
+): MetricRow[] {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rows: MetricRow[] = [];
+  ids.forEach((id, idx) => {
+    const rate = perSecBase * (0.35 + ((idx + 1) / ids.length) * 0.9);
+    for (let end = nowSec; end > nowSec - rangeSeconds; end -= bucketSeconds) {
+      const v = Math.max(0, Math.round(rate * bucketSeconds * demoSeededJitter(id, end)));
+      rows.push({ starttime: end - bucketSeconds, endtime: end, [dim]: id, [alias]: v });
+    }
+  });
+  return rows;
+}
+
+async function demoIds(dim: 'input' | 'output'): Promise<string[]> {
+  const f = await fixtures();
+  const rows = dim === 'input' ? f.topSourcesDefault : f.topDestsDefault;
+  return [...new Set(rows.map((r) => String(r[dim] ?? '')))].filter(Boolean);
+}
+
+/** Events-out time series split by destination (output). */
+export async function getOutEventsByOutput(
+  group: string | 'all',
+  rangeSeconds: number,
+  bucketSeconds: number,
+): Promise<MetricRow[]> {
+  if (IS_DEMO) return demoSplitRows(await demoIds('output'), 'output', rangeSeconds, bucketSeconds, 40, 'events');
+  return runQuery({
+    where: whereForTop(group),
+    aggregations: ['sum("total.out_events").as("events")'],
+    splitBys: ['output'],
+    timeWindowSeconds: bucketSeconds,
+    earliestSeconds: rangeSeconds,
+  });
+}
+
+/** Bytes-out time series split by destination (output). */
+export async function getOutBytesByOutput(
+  group: string | 'all',
+  rangeSeconds: number,
+  bucketSeconds: number,
+): Promise<MetricRow[]> {
+  if (IS_DEMO) return demoSplitRows(await demoIds('output'), 'output', rangeSeconds, bucketSeconds, 55_000, 'bytes');
+  return runQuery({
+    where: whereForTop(group),
+    aggregations: ['sum("total.out_bytes").as("bytes")'],
+    splitBys: ['output'],
+    timeWindowSeconds: bucketSeconds,
+    earliestSeconds: rangeSeconds,
+  });
+}
+
+export type InSplitBy = 'input' | 'cribl_wp';
+
+/** Events-in time series split by source (input). */
+export async function getInEventsByInput(
+  group: string | 'all',
+  rangeSeconds: number,
+  bucketSeconds: number,
+): Promise<MetricRow[]> {
+  if (IS_DEMO) return demoSplitRows(await demoIds('input'), 'input', rangeSeconds, bucketSeconds, 35, 'events');
+  return runQuery({
+    where: whereForTop(group),
+    aggregations: ['sum("total.in_events").as("events")'],
+    splitBys: ['input'],
+    timeWindowSeconds: bucketSeconds,
+    earliestSeconds: rangeSeconds,
+  });
+}
+
+/** Bytes-in time series split by source (input). */
+export async function getInBytesByInput(
+  group: string | 'all',
+  rangeSeconds: number,
+  bucketSeconds: number,
+): Promise<MetricRow[]> {
+  if (IS_DEMO) return demoSplitRows(await demoIds('input'), 'input', rangeSeconds, bucketSeconds, 48_000, 'bytes');
+  return runQuery({
+    where: whereForTop(group),
+    aggregations: ['sum("total.in_bytes").as("bytes")'],
+    splitBys: ['input'],
+    timeWindowSeconds: bucketSeconds,
+    earliestSeconds: rangeSeconds,
+  });
+}
+
+// `cribl_wp` is NOT a dimension on the aggregate `/system/metrics/query`
+// endpoint's `total.*`/`system.*` measurements (confirmed live — a
+// splitBys:['cribl_wp'] query silently returns unsplit rows with no
+// `cribl_wp` key at all). Per-worker-process metrics instead live behind the
+// per-node endpoint's `wp` query param ("Worker Process index to query.
+// Supported only on Worker Nodes" — see openapi.json `/system/metrics`), so
+// this has to be one call per process index against one specific node,
+// mirroring `getNodeMetrics`.
+const MAX_WORKER_PROCESSES = 24;
+
+async function fetchWorkerProcessRow(nodeId: string, wp: number, rangeSeconds: number): Promise<MetricRow[]> {
+  const now = Math.floor(Date.now() / 1000);
+  const res = await apiGet<{ results?: { metrics?: RawNodeEntry[] } }>(
+    `/w/${encodeURIComponent(nodeId)}/system/metrics?wp=${wp}&earliest=${now - rangeSeconds}&latest=${now}`,
+  );
+  const entries = res.results?.metrics ?? [];
+  const rows: MetricRow[] = [];
+  for (const e of entries) {
+    const t = entryVal(e, '_time');
+    if (t == null) continue;
+    rows.push({
+      starttime: t,
+      endtime: t,
+      cribl_wp: `w${wp}`,
+      events: entryVal(e, 'total.in_events') ?? 0,
+      bytes: entryVal(e, 'total.in_bytes') ?? 0,
+      cpu: entryVal(e, 'system.cpu_perc') ?? 0,
+    });
+  }
+  return rows;
+}
+
+function demoWorkerProcessRows(wpCount: number, rangeSeconds: number, bucketSeconds: number): MetricRow[] {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rows: MetricRow[] = [];
+  for (let wp = 0; wp < wpCount; wp++) {
+    const id = `w${wp}`;
+    let h = 0;
+    for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 997;
+    const evRate = 35 * (0.35 + ((wp + 1) / wpCount) * 0.9);
+    const cpuBase = 12 + (h % 40) + wp * 3;
+    for (let end = nowSec; end > nowSec - rangeSeconds; end -= bucketSeconds) {
+      const jitter = demoSeededJitter(id, end);
+      const wave = Math.sin(end / 1800 + h) * 9 + Math.sin(end / 300 + h * 2) * 4;
+      const events = Math.max(0, Math.round(evRate * bucketSeconds * jitter));
+      rows.push({
+        starttime: end,
+        endtime: end,
+        cribl_wp: id,
+        events,
+        bytes: Math.round(events * 1400),
+        cpu: Math.min(99, Math.max(1, cpuBase + wave)),
+      });
+    }
+  }
+  return rows;
+}
+
+/**
+ * Per-worker-process rows (events-in, bytes-in, CPU%) for one node's worker
+ * processes — surfaces uneven load across processes (one pinned near 100%
+ * CPU/events while its siblings idle is the classic TCP-pinning signature).
+ * Node-scoped because `wp` is a per-node process index, not a cluster-wide id.
+ */
+export async function getWorkerProcessRows(
+  nodeId: string,
+  wpCount: number,
+  rangeSeconds: number,
+  bucketSeconds: number,
+): Promise<MetricRow[]> {
+  const count = Math.min(MAX_WORKER_PROCESSES, Math.max(1, wpCount));
+  if (IS_DEMO) return demoWorkerProcessRows(count, rangeSeconds, bucketSeconds);
+  const rows = await Promise.all(
+    Array.from({ length: count }, (_, wp) => fetchWorkerProcessRow(nodeId, wp, rangeSeconds)),
+  );
+  return rows.flat();
+}
+
+// ---------------------------------------------------------------------------
 // Destination backpressure & persistent queues
 // ---------------------------------------------------------------------------
 
@@ -441,6 +622,47 @@ export async function getInputPQStats(
   return getPQStatsByDim('input', group, rangeSeconds, bucketSeconds);
 }
 
+// Demo PQ-size-over-time profiles: the backpressured entry ramps up toward
+// its peak (the "PQ growing = destination can't keep up" signal this
+// dashboard exists to catch); the recovered one decays back toward zero.
+function demoPQSeries(
+  dim: 'input' | 'output',
+  group: string | 'all',
+  rangeSeconds: number,
+  bucketSeconds: number,
+): MetricRow[] {
+  const table = dim === 'output' ? DEMO_PQ : DEMO_PQ_SOURCES;
+  const entries = Object.entries(table).filter(([key]) => group === 'all' || key.startsWith(`${group}::`));
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rows: MetricRow[] = [];
+  for (const [key, v] of entries) {
+    const [g, id] = key.split('::');
+    for (let end = nowSec; end > nowSec - rangeSeconds; end -= bucketSeconds) {
+      const frac = 1 - (nowSec - end) / rangeSeconds; // 0 at window start -> 1 now
+      const val = v.now ? v.peak * Math.min(1, frac * 1.15) : v.peak * Math.max(0, 1 - frac * 1.4);
+      rows.push({ starttime: end - bucketSeconds, endtime: end, [dim]: id, __worker_group: g, pqBytes: Math.max(0, val) });
+    }
+  }
+  return rows;
+}
+
+/** Raw per-bucket PQ-size rows split by input or output, for the size-over-time chart. */
+export async function getPQSeriesByDim(
+  dim: 'input' | 'output',
+  group: string | 'all',
+  rangeSeconds: number,
+  bucketSeconds: number,
+): Promise<MetricRow[]> {
+  if (IS_DEMO) return demoPQSeries(dim, group, rangeSeconds, bucketSeconds);
+  return runQuery({
+    where: whereForTop(group),
+    aggregations: ['max("pq.queue_size").as("pqBytes")'],
+    splitBys: [dim, '__worker_group'],
+    timeWindowSeconds: bucketSeconds,
+    earliestSeconds: rangeSeconds,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Per-node system metrics (CPU / memory sparklines)
 // ---------------------------------------------------------------------------
@@ -509,6 +731,54 @@ export async function getNodeMetrics(nodeId: string, rangeSeconds: number): Prom
   return points;
 }
 
+export interface NodeThroughputPoint {
+  /** Sample time, epoch ms. */
+  t: number;
+  inBytes: number;
+  outBytes: number;
+}
+
+function demoNodeThroughput(nodeId: string, rangeSeconds: number): NodeThroughputPoint[] {
+  let h = 0;
+  for (const c of nodeId) h = (h * 31 + c.charCodeAt(0)) % 997;
+  const baseInBps = 400_000 + (h % 900_000);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const stepSec = Math.max(60, Math.floor(rangeSeconds / 48));
+  const out: NodeThroughputPoint[] = [];
+  for (let t = nowSec - rangeSeconds; t <= nowSec; t += stepSec) {
+    const wave = 0.55 + 0.45 * Math.abs(Math.sin(t / 5400 + h));
+    const inBps = baseInBps * wave;
+    out.push({ t: t * 1000, inBytes: inBps * stepSec, outBytes: inBps * stepSec * 0.65 });
+  }
+  return out;
+}
+
+/**
+ * Whole-node in/out byte throughput from the per-node system metrics endpoint
+ * (same source as `getNodeMetrics`, just reading the `total.*_bytes` fields
+ * instead of `system.*`) — used to size one node's capacity against its
+ * observed load without depending on the aggregate query's `host` dimension.
+ */
+export async function getNodeThroughput(nodeId: string, rangeSeconds: number): Promise<NodeThroughputPoint[]> {
+  if (IS_DEMO) return demoNodeThroughput(nodeId, rangeSeconds);
+  const now = Math.floor(Date.now() / 1000);
+  const res = await apiGet<{ results?: { metrics?: RawNodeEntry[] } }>(
+    `/w/${encodeURIComponent(nodeId)}/system/metrics?earliest=${now - rangeSeconds}&latest=${now}`,
+  );
+  const entries = res.results?.metrics ?? [];
+  const points: NodeThroughputPoint[] = [];
+  for (const e of entries) {
+    const t = entryVal(e, '_time');
+    if (t == null) continue;
+    const inBytes = entryVal(e, 'total.in_bytes');
+    const outBytes = entryVal(e, 'total.out_bytes');
+    if (inBytes == null && outBytes == null) continue;
+    points.push({ t: t * 1000, inBytes: inBytes ?? 0, outBytes: outBytes ?? 0 });
+  }
+  points.sort((a, b) => a.t - b.t);
+  return points;
+}
+
 // ---------------------------------------------------------------------------
 // License quota (daily ingest allowance)
 // ---------------------------------------------------------------------------
@@ -542,23 +812,42 @@ const DEMO_ROUTES = [
   { route: 'linux-journald', group: 'Linux_Fleet', eps: 150, Bps: 60_000 },
 ];
 
+// Reduction factor per demo route (a filter/sampling step inside the route
+// itself, distinct from a downstream pipeline's own reduction) — mirrors the
+// Splunk dashboard's Route mode, which reports both in and out for routes
+// (unlike pipelines, which only report event counts, no bytes, in core metrics).
+const DEMO_ROUTE_REDUCTION: Record<string, number> = {
+  default: 0,
+  'syslog-to-s3': 0.08,
+  'firewall-archive': 0.42,
+  'metrics-to-prometheus': 0,
+  'win-events': 0.15,
+  'nessus-scans': 0,
+  'linux-journald': 0.05,
+};
+
 function demoRouteRows(group: string | 'all', rangeSeconds: number, bucketSeconds: number): MetricRow[] {
   const nowSec = Math.floor(Date.now() / 1000);
   const rows: MetricRow[] = [];
   for (const r of DEMO_ROUTES) {
     if (group !== 'all' && r.group !== group) continue;
     const silent = r.silentSeconds ?? 0;
+    const reduction = 1 - (DEMO_ROUTE_REDUCTION[r.route] ?? 0);
     for (let end = nowSec; end > nowSec - rangeSeconds; end -= bucketSeconds) {
       if (nowSec - end < silent) continue; // the route's silent tail: no rows
       const jitter = 0.75 + 0.5 * Math.abs(Math.sin(end / 977 + r.route.length));
+      const eventsIn = Math.round(r.eps * bucketSeconds * jitter);
+      const bytesIn = Math.round(r.Bps * bucketSeconds * jitter);
       rows.push({
         starttime: end - bucketSeconds,
         endtime: end,
         route: r.route,
         name: r.route,
         __worker_group: r.group,
-        eventsIn: Math.round(r.eps * bucketSeconds * jitter),
-        bytesIn: Math.round(r.Bps * bucketSeconds * jitter),
+        eventsIn,
+        bytesIn,
+        eventsOut: Math.round(eventsIn * reduction),
+        bytesOut: Math.round(bytesIn * reduction),
       });
     }
   }
@@ -567,7 +856,8 @@ function demoRouteRows(group: string | 'all', rangeSeconds: number, bucketSecond
 
 /**
  * Per-route throughput samples (split by route + worker group), bucketed by
- * `bucketSeconds`. Feeds the Route Health page's stall detection.
+ * `bucketSeconds`. Feeds the Route Health page's stall detection and the
+ * Route/Pipeline Reductions page's Route mode.
  */
 export async function getRouteSeries(
   group: string | 'all',
@@ -580,6 +870,8 @@ export async function getRouteSeries(
     aggregations: [
       'sum("route.in_events").as("eventsIn")',
       'sum("route.in_bytes").as("bytesIn")',
+      'sum("route.out_events").as("eventsOut")',
+      'sum("route.out_bytes").as("bytesOut")',
     ],
     splitBys: ['route', 'name', '__worker_group'],
     timeWindowSeconds: bucketSeconds,
@@ -722,6 +1014,48 @@ export async function getPipelineStats(
     acc.set(key, cur);
   }
   return [...acc.values()].sort((a, b) => b.eventsIn - a.eventsIn);
+}
+
+function demoPipelineRows(group: string | 'all', rangeSeconds: number, bucketSeconds: number): MetricRow[] {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const rows: MetricRow[] = [];
+  for (const p of DEMO_PIPELINES) {
+    if (group !== 'all' && p.group !== group) continue;
+    for (let end = nowSec; end > nowSec - rangeSeconds; end -= bucketSeconds) {
+      const jitter = 0.75 + 0.5 * Math.abs(Math.sin(end / 977 + p.id.length));
+      const eventsIn = Math.round(p.eps * bucketSeconds * jitter);
+      rows.push({
+        starttime: end - bucketSeconds,
+        endtime: end,
+        id: p.id,
+        __worker_group: p.group,
+        eventsIn,
+        eventsOut: Math.round(eventsIn * (1 - p.dropPct - p.errPct)),
+      });
+    }
+  }
+  return rows;
+}
+
+/**
+ * Per-pipeline event I/O samples (split by pipeline + worker group), bucketed
+ * by `bucketSeconds` — pipelines don't report byte metrics in core internal
+ * metrics (only routes do), so this is event counts only. Feeds the
+ * Route/Pipeline Reductions page's Pipeline mode.
+ */
+export async function getPipelineSeries(
+  group: string | 'all',
+  rangeSeconds: number,
+  bucketSeconds: number,
+): Promise<MetricRow[]> {
+  if (IS_DEMO) return demoPipelineRows(group, rangeSeconds, bucketSeconds);
+  return runQuery({
+    where: whereForTop(group),
+    aggregations: ['sum("pipe.in_events").as("eventsIn")', 'sum("pipe.out_events").as("eventsOut")'],
+    splitBys: ['id', '__worker_group'],
+    timeWindowSeconds: bucketSeconds,
+    earliestSeconds: rangeSeconds,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -921,4 +1255,297 @@ export async function deleteNotification(group: string, id: string): Promise<voi
     return;
   }
   await apiDelete(`/m/${encodeURIComponent(group)}/notifications/${encodeURIComponent(id)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Internal-log search (Log Analytics page)
+// ---------------------------------------------------------------------------
+//
+// `/system/logs/search` reaches a worker group's centrally-stored log via
+// `type=group&groupId=<gid>` — it can't address one specific Worker/Edge
+// node's log within a group (no equivalent to `/w/:id/system/metrics`), and
+// there's no confirmed-working path for the Leader's own root log.
+
+export interface LogEntry {
+  time: number; // epoch ms
+  level: string;
+  channel: string;
+  message: string;
+  reason?: string;
+  /** The event exactly as returned by the server, for raw-text display. */
+  raw: Record<string, unknown>;
+}
+
+const LOG_LEVELS = ['error', 'warn', 'info', 'debug', 'silly'] as const;
+
+function strField(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/** `time` comes back as either an epoch number (seconds or ms) or an ISO-8601 string. */
+function parseLogTime(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v > 1e12 ? v : v * 1000;
+  if (typeof v === 'string') {
+    const ms = Date.parse(v);
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+}
+
+/** Parse one raw log-search event (shape is server-defined, `additionalProperties: true`). */
+function parseLogEvent(e: Record<string, unknown>): LogEntry | null {
+  const level = strField(e.level)?.toLowerCase();
+  if (!level) return null;
+  const time = parseLogTime(e.time ?? e._time ?? e.ts) ?? Date.now();
+  const errObj = e.error as Record<string, unknown> | undefined;
+  const errObj2 = e.err as Record<string, unknown> | undefined;
+  const reason = strField(e.reason) ?? strField(errObj?.message) ?? strField(errObj2?.message);
+  return {
+    time,
+    level,
+    channel: strField(e.channel) ?? '(none)',
+    message: strField(e.message) ?? '(no message)',
+    reason,
+    raw: e,
+  };
+}
+
+const DEMO_LOG_MESSAGES: Record<string, { level: string; channel: string; message: string; reason?: string; weight: number }[]> = {
+  error: [
+    { level: 'error', channel: 'outputs', message: 'Failed to send to destination', reason: 'connect ECONNREFUSED 10.0.4.21:9997', weight: 6 },
+    { level: 'error', channel: 'inputs', message: 'TLS handshake failed', reason: 'unable to verify the first certificate', weight: 2 },
+  ],
+  warn: [
+    { level: 'warn', channel: 'pipelines', message: 'Dropping event, exceeded max size', weight: 14 },
+    { level: 'warn', channel: 'outputs', message: 'Persistent queue backing up', reason: 'downstream unhealthy', weight: 5 },
+    { level: 'warn', channel: 'license', message: 'Approaching daily ingest quota', weight: 3 },
+  ],
+  info: [
+    { level: 'info', channel: 'server', message: '_raw stats', weight: 40 },
+    { level: 'info', channel: 'cfg', message: 'Config committed', weight: 6 },
+    { level: 'info', channel: 'inputs', message: 'Source started', weight: 8 },
+  ],
+  debug: [{ level: 'debug', channel: 'pipelines', message: 'Function eval', weight: 20 }],
+  silly: [{ level: 'silly', channel: 'server', message: 'heartbeat', weight: 30 }],
+};
+
+function demoLogEntries(rangeSeconds: number): LogEntry[] {
+  const nowMs = Date.now();
+  const entries: LogEntry[] = [];
+  for (const level of LOG_LEVELS) {
+    for (const tmpl of DEMO_LOG_MESSAGES[level]) {
+      const count = Math.max(1, Math.round((tmpl.weight * rangeSeconds) / 900));
+      for (let i = 0; i < count; i++) {
+        const time = nowMs - Math.floor(Math.random() * rangeSeconds * 1000);
+        entries.push({
+          time,
+          level: tmpl.level,
+          channel: tmpl.channel,
+          message: tmpl.message,
+          reason: tmpl.reason,
+          raw: {
+            time: new Date(time).toISOString(),
+            level: tmpl.level,
+            channel: tmpl.channel,
+            message: tmpl.message,
+            ...(tmpl.reason ? { reason: tmpl.reason } : {}),
+          },
+        });
+      }
+    }
+  }
+  return entries.sort((a, b) => b.time - a.time);
+}
+
+// `type=multi` with an explicit `files` list 500s regardless of how many
+// files are passed. `type=single` needs a real multi-segment path (a bare
+// filename like `files=cribl.log` 400s with "invalid path") and there's no
+// confirmed-working path for the Leader's own root log, so this only covers
+// `type=group&groupId=<gid>`, which lets the server resolve that group's own
+// log file(s) itself — no path-guessing needed.
+async function fetchLogEvents(params: Record<string, string>): Promise<Record<string, unknown>[]> {
+  const qs = new URLSearchParams(params);
+  try {
+    // Some validation failures come back as HTTP 200 with a `{status:"error"}`
+    // body rather than a non-2xx status, so apiGet won't throw on them —
+    // check explicitly or a bad group/path silently reads as "no data". A
+    // successful response is `{ items: [{ events: [...] }] }` — one item per
+    // matched log file (e.g. cribl.log and cribl_stderr.log for one group).
+    const res = await apiGet<{
+      status?: string;
+      message?: string;
+      items?: { events?: Record<string, unknown>[] }[];
+    }>(`/system/logs/search?${qs.toString()}`);
+    if (res.status === 'error') {
+      console.warn(`/system/logs/search (${qs.toString()}):`, res.message);
+      return [];
+    }
+    return (res.items ?? []).flatMap((item) => item.events ?? []);
+  } catch (e) {
+    // One inaccessible/renamed log file or group shouldn't blank the whole page.
+    console.warn(`/system/logs/search (${qs.toString()}):`, e);
+    return [];
+  }
+}
+
+const MAX_LOGS_SEARCH_LIMIT = 1000; // server-enforced ceiling on `limit`
+
+/** Recent log lines for the given worker groups over the window, newest first, capped at `limit`. */
+export async function searchLogs(groupIds: string[], rangeSeconds: number, limit = MAX_LOGS_SEARCH_LIMIT): Promise<LogEntry[]> {
+  if (IS_DEMO) return demoLogEntries(rangeSeconds);
+  const now = Math.floor(Date.now() / 1000);
+  const common = {
+    et: String(now - rangeSeconds),
+    lt: String(now),
+    limit: String(Math.min(limit, MAX_LOGS_SEARCH_LIMIT)),
+  };
+
+  const groupEvents = await Promise.all(
+    groupIds.map((gid) => fetchLogEvents({ ...common, type: 'group', groupId: gid })),
+  );
+
+  return groupEvents
+    .flat()
+    .map(parseLogEvent)
+    .filter((e): e is LogEntry => e != null)
+    .sort((a, b) => b.time - a.time);
+}
+
+// ---------------------------------------------------------------------------
+// Config commit history (Commit Audit Log page)
+// ---------------------------------------------------------------------------
+//
+// `GET /version` is Cribl's own git-log-equivalent for the config repo, and
+// `GET /version/show?commit=<hash>` returns that commit's message plus a
+// structured diff for every file it touched — no deploy-history API exists
+// (deploying is a write-only action), so this only covers commits.
+
+export interface CommitInfo {
+  hash: string;
+  authorName: string;
+  authorEmail: string;
+  date: number; // epoch ms
+  message: string;
+  body?: string;
+}
+
+export type DiffLineEntry =
+  | { type: 'insert'; newNumber: number; content: string }
+  | { type: 'delete'; oldNumber: number; content: string }
+  | { type: 'context'; oldNumber: number; newNumber: number; content: string };
+
+export interface DiffFileEntry {
+  oldName: string;
+  newName: string;
+  isNew: boolean;
+  isDeleted: boolean;
+  isRename: boolean;
+  isBinary: boolean;
+  addedLines: number;
+  deletedLines: number;
+  blocks: { header: string; lines: DiffLineEntry[] }[];
+}
+
+export interface CommitDetail {
+  message: string;
+  files: DiffFileEntry[];
+}
+
+function parseCommitDate(v: unknown): number {
+  const ms = typeof v === 'string' ? Date.parse(v) : NaN;
+  return Number.isFinite(ms) ? ms : Date.now();
+}
+
+const DEMO_COMMITS: { author: string; email: string; message: string; hoursAgo: number }[] = [
+  { author: 'j.woger', email: 'j.woger@example.com', message: 'Update pipeline: syslog-clean — drop debug fields', hoursAgo: 2 },
+  { author: 'a.chen', email: 'a.chen@example.com', message: 'Add destination: splunk-hec-dr', hoursAgo: 9 },
+  { author: 'j.woger', email: 'j.woger@example.com', message: 'Increase persistent queue size on AIO_Splunk', hoursAgo: 26 },
+  { author: 'svc-cribl-ci', email: 'ci@example.com', message: 'Sync routes from staging branch', hoursAgo: 30 },
+  { author: 'a.chen', email: 'a.chen@example.com', message: 'Fix regex in firewall-filter pipeline', hoursAgo: 55 },
+  { author: 'j.woger', email: 'j.woger@example.com', message: 'Rotate TLS cert for in_syslog_tls', hoursAgo: 80 },
+  { author: 'svc-cribl-ci', email: 'ci@example.com', message: 'Sync routes from staging branch', hoursAgo: 100 },
+  { author: 'a.chen', email: 'a.chen@example.com', message: 'Remove unused lookup: legacy_hostmap', hoursAgo: 148 },
+];
+
+const DEMO_HASHES = ['a3f9c21', 'e71b04d', '9c2a8f1', '4d6e0b7', 'f0a3c88', '2b7d1e4', '8c5f0a2', '1e9b3d6'];
+
+function demoCommitHistory(): CommitInfo[] {
+  const nowMs = Date.now();
+  return DEMO_COMMITS.map((c, i) => ({
+    hash: DEMO_HASHES[i % DEMO_HASHES.length],
+    authorName: c.author,
+    authorEmail: c.email,
+    date: nowMs - c.hoursAgo * 3600_000,
+    message: c.message,
+  }));
+}
+
+function demoCommitDetail(): CommitDetail {
+  return {
+    message: 'demo commit',
+    files: [
+      {
+        oldName: 'groups/default/pipelines/syslog-clean.json',
+        newName: 'groups/default/pipelines/syslog-clean.json',
+        isNew: false,
+        isDeleted: false,
+        isRename: false,
+        isBinary: false,
+        addedLines: 2,
+        deletedLines: 1,
+        blocks: [
+          {
+            header: '@@ -12,6 +12,7 @@ functions',
+            lines: [
+              { type: 'context', oldNumber: 12, newNumber: 12, content: '  { "id": "eval", "filter": "true" }' },
+              { type: 'delete', oldNumber: 13, content: '  { "id": "eval", "conf": { "keep": ["host","level"] } }' },
+              { type: 'insert', newNumber: 13, content: '  { "id": "eval", "conf": { "keep": ["host","level","source"] } }' },
+              { type: 'insert', newNumber: 14, content: '  { "id": "drop", "filter": "level==\\"debug\\"" }' },
+              { type: 'context', oldNumber: 14, newNumber: 15, content: '  { "id": "serialize" }' },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** Recent config commits, newest first. */
+export async function getCommitHistory(count = 300): Promise<CommitInfo[]> {
+  if (IS_DEMO) return demoCommitHistory();
+  const res = await apiGet<{ items?: Record<string, unknown>[] }>(`/version?count=${count}`);
+  return (res.items ?? []).map((c) => ({
+    hash: strField(c.hash) ?? '',
+    authorName: strField(c.author_name) ?? 'unknown',
+    authorEmail: strField(c.author_email) ?? '',
+    date: parseCommitDate(c.date),
+    message: strField(c.message) ?? '(no message)',
+    body: strField(c.body),
+  }));
+}
+
+/** Full diff + message for one commit — fetched on demand when a row expands. */
+export async function getCommitDetail(hash: string): Promise<CommitDetail> {
+  if (IS_DEMO) return demoCommitDetail();
+  const res = await apiGet<{ items?: { commitMessage?: string; diffJson?: Record<string, unknown>[] }[] }>(
+    `/version/show?commit=${encodeURIComponent(hash)}&diffLineLimit=400`,
+  );
+  const item = res.items?.[0];
+  const files = (item?.diffJson ?? []).map((f) => ({
+    oldName: strField(f.oldName) ?? '',
+    newName: strField(f.newName) ?? '',
+    isNew: f.isNew === true,
+    isDeleted: f.isDeleted === true,
+    isRename: f.isRename === true,
+    isBinary: f.isBinary === true,
+    addedLines: typeof f.addedLines === 'number' ? f.addedLines : 0,
+    deletedLines: typeof f.deletedLines === 'number' ? f.deletedLines : 0,
+    blocks: Array.isArray(f.blocks)
+      ? (f.blocks as Record<string, unknown>[]).map((b) => ({
+          header: strField(b.header) ?? '',
+          lines: Array.isArray(b.lines) ? (b.lines as DiffLineEntry[]) : [],
+        }))
+      : [],
+  }));
+  return { message: item?.commitMessage ?? '', files };
 }

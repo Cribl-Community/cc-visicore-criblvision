@@ -115,10 +115,13 @@ export function Meter({ pct, color }: { pct: number; color?: string }) {
 export function BarList({
   items,
   color = 'var(--series-in)',
+  colorFor,
   formatValue,
 }: {
   items: { id: string; value: number }[];
   color?: string;
+  /** Per-item color override (e.g. severity-coded rows) — falls back to `color`. */
+  colorFor?: (id: string) => string;
   formatValue: (n: number) => string;
 }) {
   const max = Math.max(1, ...items.map((i) => i.value));
@@ -134,10 +137,61 @@ export function BarList({
           <div className="barlist-track">
             <div
               className="barlist-fill"
-              style={{ width: `${(it.value / max) * 100}%`, background: color }}
+              style={{ width: `${(it.value / max) * 100}%`, background: colorFor ? colorFor(it.id) : color }}
             />
           </div>
         </div>
+      ))}
+    </div>
+  );
+}
+
+// ---- Chip multiselect -----------------------------------------------------
+/**
+ * Toggleable chip list for filtering a split-by dimension to specific ids.
+ * `null` selection means "all"; clicking the active chip set back down to
+ * empty snaps back to "all" rather than leaving a not-possible empty filter.
+ */
+export function ChipSelect({
+  options,
+  selected,
+  onChange,
+  swatch,
+}: {
+  options: string[];
+  selected: Set<string> | null;
+  onChange: (next: Set<string> | null) => void;
+  /** Optional per-id color dot (e.g. to preview the chart's series color). */
+  swatch?: (id: string) => string | undefined;
+}) {
+  function toggle(id: string) {
+    if (selected == null) {
+      onChange(new Set([id]));
+      return;
+    }
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next.size === 0 ? null : next);
+  }
+
+  if (options.length === 0) return <span className="muted" style={{ fontSize: 12.5 }}>No data yet</span>;
+
+  return (
+    <div className="chip-select">
+      <button className={`chip ${selected == null ? 'active' : ''}`} onClick={() => onChange(null)}>
+        All
+      </button>
+      {options.map((id) => (
+        <button
+          key={id}
+          className={`chip ${selected?.has(id) ? 'active' : ''}`}
+          onClick={() => toggle(id)}
+          title={id}
+        >
+          {swatch && <span className="chip-swatch" style={{ background: swatch(id) }} />}
+          {id}
+        </button>
       ))}
     </div>
   );

@@ -23,6 +23,19 @@
   --series-3: #9085e9;
   --series-drop: #f0645f;
 
+  /* 8-slot categorical palette (fixed order, never cycled — validated via
+     dataviz skill's validate_palette.js against this surface). Used for
+     multi-series split-by charts (per-output, per-input, per-worker-process);
+     beyond 8 series, cap and drop the remainder rather than reusing a hue. */
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  --chart-6: #008300;
+  --chart-7: #9085e9;
+  --chart-8: #e66767;
+
   --good: #3fb950;
   --warning: #d6a017;
   --critical: #f2564d;
@@ -57,6 +70,14 @@
   --series-out: #128a66;
   --series-3: #4a3aa7;
   --series-drop: #d03b3b;
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
   --good: #1a8f2e;
   --warning: #b07d00;
   --critical: #cf3730;
@@ -656,6 +677,60 @@ table.data tbody tr:last-child td {
   background: var(--accent-dim);
   color: var(--accent);
 }
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 18px 24px;
+}
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.filter-group.grow {
+  flex: 1;
+}
+.chip-select {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+}
+.chip {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.chip:hover {
+  border-color: var(--border-strong);
+}
+.chip.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.chip-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.filter-group[data-disabled='true'] {
+  opacity: 0.45;
+  pointer-events: none;
+}
 .meter {
   height: 7px;
   background: var(--surface-3);
@@ -773,6 +848,84 @@ table.data tbody tr:last-child td {
   word-break: break-word;
   overflow-x: auto;
   margin: 0;
+}
+
+/* ---- Raw log lines (numbered, unwrapped) -------------------------------- */
+.log-lines {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: auto;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.log-line {
+  display: flex;
+}
+.log-line-no {
+  flex: 0 0 auto;
+  position: sticky;
+  left: 0;
+  width: 52px;
+  padding: 0 10px;
+  text-align: right;
+  color: var(--muted);
+  background: var(--surface-2);
+  user-select: none;
+}
+.log-line-text {
+  flex: 1 1 auto;
+  padding-right: 13px;
+  white-space: pre;
+  color: var(--text-2);
+}
+
+/* ---- Diff view (Commit Audit Log) --------------------------------------- */
+.diff-file {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.diff-file + .diff-file {
+  margin-top: 10px;
+}
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 12px;
+  background: var(--surface-3);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.diff-block {
+  overflow-x: auto;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.diff-line {
+  display: flex;
+  white-space: pre;
+  padding: 0 12px;
+}
+.diff-line.diff-add {
+  background: color-mix(in srgb, var(--good) 12%, transparent);
+  color: var(--text);
+}
+.diff-line.diff-del {
+  background: color-mix(in srgb, var(--critical) 12%, transparent);
+  color: var(--text);
+}
+.diff-line.diff-ctx {
+  color: var(--muted);
+}
+.diff-line.diff-header {
+  color: var(--accent);
+  background: var(--surface-2);
+  padding-top: 3px;
+  padding-bottom: 3px;
 }
 
 /* ---- Expandable table row detail --------------------------------------- */
