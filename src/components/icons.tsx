@@ -129,6 +129,48 @@ export const IconMail = (p: P) => (
   </svg>
 );
 
+export const IconReduction = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M4 6h16M4 12h11M4 18h6" />
+  </svg>
+);
+
+export const IconQueue = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="3" y="5" width="18" height="4.5" rx="1.3" />
+    <rect x="3" y="14.5" width="12" height="4.5" rx="1.3" opacity="0.55" />
+  </svg>
+);
+
+export const IconCommit = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M3 12h6M15 12h6" />
+  </svg>
+);
+
+export const IconLogs = (p: P) => (
+  <svg {...base} {...p}>
+    <path d="M5 4h14v16H5z" opacity="0.35" />
+    <path d="M8 8h8M8 12h8M8 16h5" />
+  </svg>
+);
+
+export const IconSizing = (p: P) => (
+  <svg {...base} {...p}>
+    <rect x="3" y="4" width="18" height="16" rx="1.8" />
+    <path d="M7 9h2M7 12h2M7 15h2M12 9h5M12 12.5h5M12 16h3.5" opacity="0.7" />
+  </svg>
+);
+
+export const IconIntrospect = (p: P) => (
+  <svg {...base} {...p}>
+    <circle cx="10" cy="10" r="6.5" />
+    <path d="M7 11l1.6-3 1.4 4 1.4-2.5L12.4 11" />
+    <path d="M14.8 14.8L20 20" />
+  </svg>
+);
+
 export const IconChevron = (p: P) => (
   <svg {...base} {...p}>
     <path d="M9 6l6 6-6 6" />

@@ -42,6 +42,17 @@ policies:
   - object: '/system/messages'
     actions: ['GET']
 
+  # Internal-log search, for the Log Analytics page (level/channel/message
+  # breakdown) — searches the Leader's own log plus each worker group's log.
+  - object: '/system/logs/search'
+    actions: ['GET']
+
+  # Git-backed config commit history, for the Commit Audit Log page.
+  - object: '/version'
+    actions: ['GET']
+  - object: '/version/show'
+    actions: ['GET']
+
   # Per-group Source and Destination config + authoritative runtime health
   # (status.health on these endpoints reflects real connection health)
   - object: '/m/:gid/system/inputs'
