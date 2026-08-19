@@ -130,7 +130,7 @@ export async function createAppPack(dev = false) {
   );
 
   const packageInfo = Object.fromEntries(
-    ['name', 'version', 'displayName', 'description', 'author', 'license', 'cribl']
+    ['name', 'version', 'displayName', 'description', 'author', 'tags', 'license', 'cribl']
       .filter((k) => rootPackageJson?.[k])
       .map((k) => [k, rootPackageJson[k]])
   );
