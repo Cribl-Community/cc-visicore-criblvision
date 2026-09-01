@@ -26,7 +26,7 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
-      - run: npm run package -- --version "${GITHUB_REF_NAME#v}"
+      - run: npm run package -- --version "$(echo ${GITHUB_REF_NAME#v} | sed s/-staging$//)"
 
       # Materialize the Cribl pack layout (static/ + default/) on the release tag
       # so Cribl "Import from Git" (a git clone) serves the built app. Also move a
@@ -51,3 +51,23 @@ jobs:
           files: build/*.tgz
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+      # Publish the pack to the Cribl Packs Dispensary (marketplace). Uses the
+      # Cribl-Community org-level vars/secrets, same as cc-nexus.
+      - name: Upload pack to Packs Dispensary (staging)
+        if: contains(github.ref_name, '-staging')
+        run: |
+          TGZ_FILE=$(find build -name '*.tgz' | head -1)
+          if [ -z "$TGZ_FILE" ]; then echo "ERROR: No .tgz found in build/"; exit 1; fi
+          curl --fail --location '${{ vars.DISPENSARY_ENDPOINT_STAGING }}/${{ github.event.repository.name }}' \
+            --header 'Authorization: Bearer ${{ secrets.PACKS_API_TOKEN_STAGING }}' \
+            --form "file=@${TGZ_FILE}"
+
+      - name: Upload pack to Packs Dispensary (prod)
+        if: ${{ !contains(github.ref_name, '-staging') }}
+        run: |
+          TGZ_FILE=$(find build -name '*.tgz' | head -1)
+          if [ -z "$TGZ_FILE" ]; then echo "ERROR: No .tgz found in build/"; exit 1; fi
+          curl --fail --location '${{ vars.DISPENSARY_ENDPOINT }}/${{ github.event.repository.name }}' \
+            --header 'Authorization: Bearer ${{ secrets.PACKS_API_TOKEN }}' \
+            --form "file=@${TGZ_FILE}"

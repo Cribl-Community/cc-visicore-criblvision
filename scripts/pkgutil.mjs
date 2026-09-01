@@ -101,6 +101,7 @@ export async function createAppPack(dev = false) {
   const distDir = join(rootDir, 'dist');
   const proxiesPath = join(rootDir, 'config', 'proxies.yml');
   const policiesPath = join(rootDir, 'config', 'policies.yml');
+  const readmePath = join(rootDir, 'README.md');
 
   if (await pathExists(buildDir)) {
     await rm(buildDir, { recursive: true });
@@ -125,6 +126,10 @@ export async function createAppPack(dev = false) {
     await cp(policiesPath, join(buildDir, 'default', 'policies.yml'));
   }
 
+  if (await pathExists(readmePath)) {
+    await cp(readmePath, join(buildDir, 'README.md'));
+  }
+
   const rootPackageJson = JSON.parse(
     await readFile(join(rootDir, 'package.json'), 'utf8')
   );
@@ -137,6 +142,10 @@ export async function createAppPack(dev = false) {
   packageInfo.cribl = {
     ...(packageInfo.cribl ?? {}),
     createAppScriptVersion: CRIBL_CREATE_APP_SCRIPT_VERSION,
+  };
+  packageInfo.tags = {
+    ...(packageInfo.tags ?? {}),
+    product: packageInfo.tags?.product ?? [],
   };
 
   if (dev && packageInfo.name) {
