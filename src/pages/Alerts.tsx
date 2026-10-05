@@ -16,6 +16,7 @@ import {
 } from '../api/client';
 import type { CriblNotification, NotificationTarget } from '../api/types';
 import { Card, StatTile, Loading, ErrorBanner, HealthBadge } from '../components/ui';
+import { SearchAlerts } from './SearchAlerts';
 
 // The native Cribl notification conditions CriblVision can manage. Cribl's leader
 // evaluates these server-side and delivers email through the SMTP target, so
@@ -54,7 +55,7 @@ function slugify(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-export function Alerts() {
+function StreamAlerts() {
   const { groups, group, tick } = useApp();
   // Alert CRUD needs an immediate refetch after each mutation, independent of
   // the global refresh tick.
@@ -424,6 +425,25 @@ export function Alerts() {
           </div>
         </Card>
       </div>
+    </>
+  );
+}
+
+export function Alerts() {
+  const [tab, setTab] = useState<'search' | 'stream'>('search');
+  return (
+    <>
+      <div>
+        <div className="pill-tabs">
+          <button className={`pill-tab ${tab === 'search' ? 'active' : ''}`} onClick={() => setTab('search')}>
+            Alert Catalog
+          </button>
+          <button className={`pill-tab ${tab === 'stream' ? 'active' : ''}`} onClick={() => setTab('stream')}>
+            Source &amp; Destination Alerts
+          </button>
+        </div>
+      </div>
+      {tab === 'search' ? <SearchAlerts /> : <StreamAlerts />}
     </>
   );
 }

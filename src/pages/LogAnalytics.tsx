@@ -96,6 +96,8 @@ export function LogAnalytics() {
   const rawRows = useMemo(() => filtered.slice(0, MAX_RAW_ROWS), [filtered]);
 
   const dateAxis = range.rangeSeconds > 86400;
+  // The single level the page is filtered down to, if any — drives the tile toggles.
+  const onlyLevel = levels.size === 1 ? [...levels][0] : null;
   const errorCount = totalByLevel.find((r) => r.level === 'error')?.value ?? 0;
   const warnCount = totalByLevel.find((r) => r.level === 'warn')?.value ?? 0;
 
@@ -129,16 +131,27 @@ export function LogAnalytics() {
       </Card>
 
       <div className="grid grid-4">
-        <StatTile label="Log Lines" value={formatCount(filtered.length)} accent="var(--accent)" foot={<span>{range.label.toLowerCase()}</span>} />
+        <StatTile
+          label="Log Lines"
+          value={formatCount(filtered.length)}
+          accent="var(--accent)"
+          foot={<span>{range.label.toLowerCase()}</span>}
+          active={onlyLevel === null}
+          onClick={() => setLevels(DEFAULT_LEVELS)}
+        />
         <StatTile
           label="Errors"
           value={formatCount(errorCount)}
           accent={errorCount > 0 ? 'var(--critical)' : 'var(--good)'}
+          active={onlyLevel === 'error'}
+          onClick={() => setLevels(onlyLevel === 'error' ? DEFAULT_LEVELS : new Set(['error']))}
         />
         <StatTile
           label="Warnings"
           value={formatCount(warnCount)}
           accent={warnCount > 0 ? 'var(--warning)' : 'var(--good)'}
+          active={onlyLevel === 'warn'}
+          onClick={() => setLevels(onlyLevel === 'warn' ? DEFAULT_LEVELS : new Set(['warn']))}
         />
         <StatTile label="Distinct Channel / Message Pairs" value={formatCount(tableRows.length)} accent="var(--series-3)" />
       </div>

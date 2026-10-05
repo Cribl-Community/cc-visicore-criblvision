@@ -1,9 +1,10 @@
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useApp, useGroupIds } from '../state/AppContext';
 import { useAsync } from '../hooks/useAsync';
 import {
   getThroughputSeries,
-  getInputStatuses,
-  getOutputStatuses,
+  getIOStatuses,
   getTopInputs,
   getTopOutputs,
   getTopRoutes,
@@ -13,11 +14,16 @@ import {
 import { Card, StatTile, BarList, Loading, ErrorBanner, HealthBadge, Meter } from '../components/ui';
 import { TimeSeriesChart } from '../components/charts/TimeSeriesChart';
 import { HealthDonut } from '../components/charts/HealthDonut';
+import { HostMap, NodeDrawer } from '../components/FleetMap';
+import { summarizeGroups } from '../lib/fleet';
+import type { WorkerNode } from '../api/types';
 import { toPoints, sumAlias, countHealth } from '../lib/metrics';
 import { formatBytes, formatCount, formatPct, reductionPct } from '../lib/format';
 
 export function Overview() {
-  const { group, range, tick } = useApp();
+  const { group, groups, setGroup, range, tick } = useApp();
+  const navigate = useNavigate();
+  const [openNode, setOpenNode] = useState<WorkerNode | null>(null);
   const groupIds = useGroupIds();
   const idKey = groupIds.join(',');
 
@@ -26,7 +32,7 @@ export function Overview() {
     [group, range.id, tick],
   );
   const status = useAsync(
-    () => Promise.all([getInputStatuses(groupIds), getOutputStatuses(groupIds)]),
+    () => Promise.all([getIOStatuses('input', groupIds), getIOStatuses('output', groupIds)]),
     [idKey, tick],
   );
   const topIn = useAsync(() => getTopInputs(group, range.rangeSeconds), [group, range.id, tick]);
@@ -41,7 +47,13 @@ export function Overview() {
   const eventsIn = sumAlias(rows, 'eventsIn');
   const reduction = reductionPct(bytesIn, bytesOut);
 
-  const [inputs, outputs] = status.data ?? [[], []];
+  const inputs = useMemo(() => status.data?.[0].items ?? [], [status.data]);
+  const outputs = useMemo(() => status.data?.[1].items ?? [], [status.data]);
+  // Groups whose status request failed: their health is unknown, not good.
+  const failedGroups = useMemo(
+    () => [...new Set([...(status.data?.[0].failed ?? []), ...(status.data?.[1].failed ?? [])])],
+    [status.data],
+  );
   const srcHealth = countHealth(inputs.map((s) => s.status?.health));
   const dstHealth = countHealth(outputs.map((s) => s.status?.health));
 
@@ -49,6 +61,18 @@ export function Overview() {
     group === 'all' ? true : w.group === group,
   );
   const healthyNodes = nodes.filter((w) => w.status === 'healthy' && !w.disconnected).length;
+
+  const fleet = useMemo(
+    () =>
+      summarizeGroups(
+        group === 'all' ? groups : groups.filter((g) => g.id === group),
+        workers.data ?? [],
+        inputs,
+        outputs,
+        failedGroups,
+      ),
+    [groups, group, workers.data, inputs, outputs, failedGroups],
+  );
 
   const msgList = messages.data ?? [];
   const errCount = msgList.filter((m) => m.severity === 'error').length;
@@ -64,12 +88,14 @@ export function Overview() {
           value={formatBytes(bytesIn)}
           accent="var(--series-in)"
           foot={<span>{formatCount(eventsIn)} events · {formatBytes(bytesIn / secs)}/s</span>}
+          onClick={() => navigate('/throughput')}
         />
         <StatTile
           label="Data Out"
           value={formatBytes(bytesOut)}
           accent="var(--series-out)"
           foot={<span>{formatBytes(bytesOut / secs)}/s avg</span>}
+          onClick={() => navigate('/throughput')}
         />
         <StatTile
           label="Data Reduction"
@@ -82,6 +108,7 @@ export function Overview() {
             dir: reduction > 0 ? 'up' : reduction < 0 ? 'down' : 'flat',
           }}
           foot={<span>in → out, this window</span>}
+          onClick={() => navigate('/route-pipeline-reductions')}
         />
         <StatTile
           label="Healthy Nodes"
@@ -98,8 +125,35 @@ export function Overview() {
               {srcHealth.Red + dstHealth.Red} unhealthy IO · {errCount} err · {warnCount} warn
             </span>
           }
+          onClick={() => navigate('/nodes')}
         />
       </div>
+
+      <Card
+        title="Worker Groups & Edge Fleets"
+        note={group === 'all' ? 'one hexagon per node · click one for its detail, or a group name to focus on it' : undefined}
+        right={
+          group !== 'all' ? (
+            <button className="btn btn-sm" onClick={() => setGroup('all')}>
+              ← All groups
+            </button>
+          ) : undefined
+        }
+      >
+        {(status.loading && !status.data) || (workers.loading && !workers.data) ? (
+          <Loading height={140} />
+        ) : (
+          <HostMap
+            summaries={fleet}
+            selected={group}
+            onSelectGroup={setGroup}
+            onSelectNode={setOpenNode}
+            tick={tick}
+          />
+        )}
+      </Card>
+
+      {openNode && <NodeDrawer node={openNode} onClose={() => setOpenNode(null)} onSelectGroup={setGroup} />}
 
       <div className="grid grid-3">
         <Card title="Throughput (bytes in / out)" className="col-span-2" note={range.label}>

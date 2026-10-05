@@ -68,9 +68,23 @@ export function RouteHealthPage() {
           value={String(stalled.length)}
           accent={stalled.length > 0 ? 'var(--critical)' : 'var(--good)'}
           foot={<span>silent ≥ {formatDuration(stallSeconds)}</span>}
+          active={filter === 'stalled'}
+          onClick={() => setFilter(filter === 'stalled' ? 'all' : 'stalled')}
         />
-        <StatTile label="Active Routes" value={String(active.length)} accent="var(--good)" />
-        <StatTile label="Reporting Routes" value={String(routes.length)} accent="var(--accent)" />
+        <StatTile
+          label="Active Routes"
+          value={String(active.length)}
+          accent="var(--good)"
+          active={filter === 'active'}
+          onClick={() => setFilter(filter === 'active' ? 'all' : 'active')}
+        />
+        <StatTile
+          label="Reporting Routes"
+          value={String(routes.length)}
+          accent="var(--accent)"
+          active={filter === 'all'}
+          onClick={() => setFilter('all')}
+        />
         <StatTile label="Volume In" value={formatBytes(totalBytes)} accent="var(--series-in)" />
       </div>
 

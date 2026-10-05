@@ -9,6 +9,7 @@ import type {
   LicenseUsageDay,
   MetricRow,
   NotificationTarget,
+  SavedSearch,
   SystemInfo,
   SystemMessage,
   WorkerNode,
@@ -244,20 +245,40 @@ function tag(items: IOStatus[], group: string): IOStatusWithGroup[] {
   return items.map((i) => ({ ...i, group }));
 }
 
+export interface IOStatuses {
+  items: IOStatusWithGroup[];
+  /** Groups whose status request failed — their health is unknown, not good. */
+  failed: string[];
+}
+
+/**
+ * Source or Destination status across several groups, each tagged with its
+ * group. One group failing doesn't sink the rest, but it is reported: an empty
+ * list for a group must never be read as "nothing is unhealthy there".
+ */
+export async function getIOStatuses(kind: 'input' | 'output', groupIds: string[]): Promise<IOStatuses> {
+  const failed: string[] = [];
+  const all = await Promise.all(
+    groupIds.map((g) =>
+      (kind === 'input' ? getInputStatus(g) : getOutputStatus(g))
+        .then((items) => tag(items, g))
+        .catch(() => {
+          failed.push(g);
+          return [] as IOStatusWithGroup[];
+        }),
+    ),
+  );
+  return { items: all.flat(), failed };
+}
+
 /** Source status across several groups, each tagged with its group. */
 export async function getInputStatuses(groupIds: string[]): Promise<IOStatusWithGroup[]> {
-  const all = await Promise.all(
-    groupIds.map((g) => getInputStatus(g).then((items) => tag(items, g)).catch(() => [])),
-  );
-  return all.flat();
+  return (await getIOStatuses('input', groupIds)).items;
 }
 
 /** Destination status across several groups, each tagged with its group. */
 export async function getOutputStatuses(groupIds: string[]): Promise<IOStatusWithGroup[]> {
-  const all = await Promise.all(
-    groupIds.map((g) => getOutputStatus(g).then((items) => tag(items, g)).catch(() => [])),
-  );
-  return all.flat();
+  return (await getIOStatuses('output', groupIds)).items;
 }
 
 /** Throughput (events + bytes in/out) time series for a group or all groups. */
@@ -905,6 +926,49 @@ export async function getTopInputs(group: string | 'all', rangeSeconds: number):
   return aggregateSplit(rows, 'input', IS_DEMO ? 'bytesIn' : 'bytes', IS_DEMO ? 'eventsIn' : 'events');
 }
 
+/**
+ * Volume per Source or Destination, keyed "group::id". The same id can exist in
+ * several groups (in_splunk_hec, devnull…), so volumes must not be matched by
+ * id alone — each group's object would otherwise show the combined total.
+ */
+export async function getIOVolumes(
+  kind: 'input' | 'output',
+  group: string | 'all',
+  rangeSeconds: number,
+): Promise<Map<string, TopItem>> {
+  const out = new Map<string, TopItem>();
+  if (IS_DEMO) {
+    // The demo capture only has per-object volumes for the default group.
+    const f = await fixtures();
+    const items =
+      kind === 'input'
+        ? aggregateSplit(f.topSourcesDefault, 'input', 'bytesIn', 'eventsIn')
+        : aggregateSplit(f.topDestsDefault, 'output', 'bytesOut', 'eventsOut');
+    for (const it of items) out.set(`default::${it.id}`, it);
+    return out;
+  }
+  const dir = kind === 'input' ? 'in' : 'out';
+  const rows = await runQuery({
+    where: whereForTop(group),
+    aggregations: [`sum("total.${dir}_bytes").as("bytes")`, `sum("total.${dir}_events").as("events")`],
+    splitBys: [kind, '__worker_group'],
+    timeWindowSeconds: -1,
+    earliestSeconds: rangeSeconds,
+  });
+  for (const r of rows) {
+    const raw = typeof r[kind] === 'string' ? (r[kind] as string) : '';
+    if (!raw) continue;
+    const id = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;
+    const grp = typeof r.__worker_group === 'string' ? r.__worker_group : '(unknown)';
+    const key = `${grp}::${id}`;
+    const cur = out.get(key) ?? { id, bytes: 0, events: 0 };
+    cur.bytes += Number(r.bytes ?? 0);
+    cur.events += Number(r.events ?? 0);
+    out.set(key, cur);
+  }
+  return out;
+}
+
 /** Top destinations by bytes out for a group, aggregated across buckets. */
 export async function getTopOutputs(group: string | 'all', rangeSeconds: number): Promise<TopItem[]> {
   const rows = IS_DEMO
@@ -1258,6 +1322,212 @@ export async function deleteNotification(group: string, id: string): Promise<voi
 }
 
 // ---------------------------------------------------------------------------
+// Search alerts — Cribl Search scheduled saved searches + their notifications
+// ---------------------------------------------------------------------------
+
+// Search endpoints always run in the default_search group.
+const SAVED_SEARCHES = '/m/default_search/search/saved';
+
+const DEMO_SEARCH_ALERTS_KEY = 'criblvision-demo-search-alerts';
+
+function loadDemoSearchAlerts(): SavedSearch[] {
+  try {
+    const raw = localStorage.getItem(DEMO_SEARCH_ALERTS_KEY);
+    if (raw) return JSON.parse(raw) as SavedSearch[];
+  } catch {
+    /* fall through to seed */
+  }
+  return [
+    {
+      id: 'worker_cpu_high',
+      name: 'P2 - Worker CPU load high',
+      description: 'Load average above 4 on any worker node',
+      query: 'dataset="cribl_metrics" | where metric == "system.load_avg" and value > 4.0',
+      earliest: '-1h',
+      latest: 'now',
+      schedule: {
+        enabled: true,
+        cronSchedule: '*/15 * * * *',
+        tz: 'UTC',
+        notifications: {
+          disabled: false,
+          items: [
+            {
+              id: 'worker_cpu_high_notification_1',
+              condition: 'search',
+              targets: ['system_email'],
+              conf: { triggerType: 'resultsCount', triggerComparator: '>', triggerCount: 0 },
+              targetConfigs: [
+                {
+                  id: 'system_email',
+                  conf: { subject: '[P2] Worker CPU load high', emailRecipient: { to: 'ops@example.com' } },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  ];
+}
+
+function saveDemoSearchAlerts(items: SavedSearch[]): void {
+  try {
+    localStorage.setItem(DEMO_SEARCH_ALERTS_KEY, JSON.stringify(items));
+  } catch {
+    /* demo persistence is best-effort */
+  }
+}
+
+/** Deep link to the saved searches list in the Cribl Search UI ('' in demo mode). */
+export function savedSearchesLink(): string {
+  return CRIBL_ORIGIN ? `${CRIBL_ORIGIN}/search/saved` : '';
+}
+
+/** Every saved search in Cribl Search (alerts are the scheduled ones with notifications). */
+export async function getSavedSearches(): Promise<SavedSearch[]> {
+  if (IS_DEMO) return loadDemoSearchAlerts();
+  return (await apiGet<{ items?: SavedSearch[] }>(SAVED_SEARCHES)).items ?? [];
+}
+
+/**
+ * Create a scheduled saved search and attach its notifications. Cribl ignores
+ * notifications embedded in the create body, so each one is posted separately.
+ */
+export async function createSearchAlert(s: SavedSearch): Promise<void> {
+  if (IS_DEMO) {
+    const items = loadDemoSearchAlerts();
+    if (items.some((x) => x.id === s.id)) throw new Error(`Alert id "${s.id}" already exists`);
+    saveDemoSearchAlerts([...items, s]);
+    return;
+  }
+  const notifications = s.schedule?.notifications?.items ?? [];
+  await apiPost(SAVED_SEARCHES, {
+    ...s,
+    schedule: { ...s.schedule, notifications: { disabled: s.schedule?.notifications?.disabled ?? false } },
+  });
+  try {
+    for (const n of notifications) {
+      await apiPost(`${SAVED_SEARCHES}/${encodeURIComponent(s.id)}/notifications`, n);
+    }
+  } catch (e) {
+    // Don't leave behind a scheduled search that runs but can never notify.
+    await apiDelete(`${SAVED_SEARCHES}/${encodeURIComponent(s.id)}`).catch(() => {});
+    throw e;
+  }
+}
+
+/** Full-object update of a saved search (the API does not support partial updates). */
+export async function updateSavedSearch(s: SavedSearch): Promise<void> {
+  if (IS_DEMO) {
+    saveDemoSearchAlerts(loadDemoSearchAlerts().map((x) => (x.id === s.id ? s : x)));
+    return;
+  }
+  await apiPatch(`${SAVED_SEARCHES}/${encodeURIComponent(s.id)}`, s);
+}
+
+/** Full-object update of one notification attached to a saved search. */
+export async function updateSearchNotification(searchId: string, n: CriblNotification): Promise<void> {
+  if (IS_DEMO) {
+    saveDemoSearchAlerts(
+      loadDemoSearchAlerts().map((x) =>
+        x.id !== searchId || !x.schedule?.notifications
+          ? x
+          : {
+              ...x,
+              schedule: {
+                ...x.schedule,
+                notifications: {
+                  ...x.schedule.notifications,
+                  items: (x.schedule.notifications.items ?? []).map((i) => (i.id === n.id ? n : i)),
+                },
+              },
+            },
+      ),
+    );
+    return;
+  }
+  await apiPatch(
+    `${SAVED_SEARCHES}/${encodeURIComponent(searchId)}/notifications/${encodeURIComponent(n.id)}`,
+    n,
+  );
+}
+
+export interface SearchRun {
+  rows: Record<string, unknown>[];
+  /** Rows the search produced in total; `rows` holds at most the first 50. */
+  total: number;
+}
+
+const SEARCH_JOBS = '/m/default_search/search/jobs';
+const SEARCH_POLL_MS = 1000;
+const SEARCH_TIMEOUT_MS = 120_000;
+
+/** Cribl wraps query errors as a JSON string inside `message`; dig the text out. */
+async function searchError(res: Response): Promise<string> {
+  try {
+    const { message } = (await res.json()) as { message?: string };
+    if (!message) return `Search failed → ${res.status} ${res.statusText}`;
+    try {
+      const inner = JSON.parse(message) as { message?: string };
+      return inner.message ?? message;
+    } catch {
+      return message;
+    }
+  } catch {
+    return `Search failed → ${res.status} ${res.statusText}`;
+  }
+}
+
+/**
+ * Run a one-off Cribl Search job and return its first rows — the same query an
+ * alert runs on its schedule, so a result here is what the alert would act on.
+ */
+export async function runSearch(query: string, earliest: string): Promise<SearchRun> {
+  if (IS_DEMO) {
+    await new Promise((r) => setTimeout(r, 400));
+    return { rows: [], total: 0 };
+  }
+  const created = await fetch(`${API_URL}${SEARCH_JOBS}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ query, earliest, latest: 'now' }),
+  });
+  if (!created.ok) throw new Error(await searchError(created));
+  const id = ((await created.json()) as { items?: { id: string }[] }).items?.[0]?.id;
+  if (!id) throw new Error('Cribl Search did not return a job id.');
+  const job = `${SEARCH_JOBS}/${encodeURIComponent(id)}`;
+
+  const deadline = Date.now() + SEARCH_TIMEOUT_MS;
+  for (;;) {
+    const status = (await apiGet<{ items?: { status?: string; error?: unknown }[] }>(job)).items?.[0];
+    if (status?.status === 'completed') break;
+    if (status?.status === 'failed' || status?.status === 'canceled') {
+      throw new Error(typeof status.error === 'string' ? status.error : `Search ${status.status}.`);
+    }
+    if (Date.now() > deadline) throw new Error('Search is still running after 2 minutes — try a shorter time range.');
+    await new Promise((r) => setTimeout(r, SEARCH_POLL_MS));
+  }
+
+  // Results are NDJSON: a header line, then one row per line.
+  const res = await fetch(`${API_URL}${job}/results?limit=50`, { headers: { accept: 'application/x-ndjson' } });
+  if (!res.ok) throw new Error(`GET ${job}/results → ${res.status} ${res.statusText}`);
+  const [header, ...lines] = (await res.text()).split('\n').filter((l) => l.trim());
+  const rows = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+  const total = (JSON.parse(header ?? '{}') as { totalEventCount?: number }).totalEventCount ?? rows.length;
+  return { rows, total };
+}
+
+/** Delete a saved search; Cribl removes its notifications with it. */
+export async function deleteSavedSearch(id: string): Promise<void> {
+  if (IS_DEMO) {
+    saveDemoSearchAlerts(loadDemoSearchAlerts().filter((x) => x.id !== id));
+    return;
+  }
+  await apiDelete(`${SAVED_SEARCHES}/${encodeURIComponent(id)}`);
+}
+
+// ---------------------------------------------------------------------------
 // Internal-log search (Log Analytics page)
 // ---------------------------------------------------------------------------
 //
@@ -1363,6 +1633,132 @@ function demoLogEntries(rangeSeconds: number): LogEntry[] {
 // confirmed-working path for the Leader's own root log, so this only covers
 // `type=group&groupId=<gid>`, which lets the server resolve that group's own
 // log file(s) itself — no path-guessing needed.
+// ---------------------------------------------------------------------------
+// Why is this Source / Destination unhealthy? — node log lines about it
+// ---------------------------------------------------------------------------
+//
+// Sources and Destinations run inside the worker processes, so the reason one
+// is failing ("connection refused", "ENOTFOUND", "Throttle engaged") is only
+// written to each node's worker-process log, never to the Leader's group log.
+
+/** Identical log lines about one Source/Destination, rolled up. */
+export interface IOLogGroup {
+  level: string;
+  message: string;
+  reason?: string;
+  count: number;
+  /** Most recent occurrence, epoch ms. */
+  last: number;
+  hosts: string[];
+}
+
+export interface IOLogs {
+  groups: IOLogGroup[];
+  /** Nodes whose logs were read. */
+  nodes: number;
+}
+
+const IO_LOG_MAX_NODES = 3;
+const IO_LOG_MAX_PROCESSES = 4;
+const IO_LOG_LIMIT = 100;
+
+function reasonText(reason: unknown): string | undefined {
+  if (typeof reason === 'string') return reason;
+  if (reason && typeof reason === 'object') {
+    const message = (reason as { message?: unknown }).message;
+    return typeof message === 'string' ? message : JSON.stringify(reason);
+  }
+  return undefined;
+}
+
+/**
+ * Recent log lines that mention one Source/Destination, read from the worker
+ * processes of up to three of the group's connected nodes.
+ */
+export async function getIOLogs(
+  kind: 'input' | 'output',
+  id: string,
+  group: string,
+  rangeSeconds: number,
+): Promise<IOLogs> {
+  if (IS_DEMO) {
+    return {
+      nodes: 1,
+      groups: [
+        {
+          level: 'error',
+          message: kind === 'input' ? 'Kafka client experienced an error' : 'connection error',
+          reason: 'Connection error: getaddrinfo ENOTFOUND broker.example.internal',
+          count: 42,
+          last: Date.now() - 60_000,
+          hosts: ['demo-worker-1'],
+        },
+      ],
+    };
+  }
+  const nodes = (await getWorkers())
+    .filter((w) => w.group === group && !w.disconnected)
+    .slice(0, IO_LOG_MAX_NODES);
+  const now = Math.floor(Date.now() / 1000);
+  const tag = `${kind}:${id}`;
+  // Matches the line's channel ("input:foo") and ids derived from it ("input:foo:…").
+  const filter = `_raw.includes(${JSON.stringify(`"${tag}"`)}) || _raw.includes(${JSON.stringify(`${tag}:`)})`;
+  const qs = new URLSearchParams({
+    et: String(now - rangeSeconds),
+    lt: String(now),
+    limit: String(IO_LOG_LIMIT),
+    filter,
+  });
+
+  const perFile = await Promise.all(
+    nodes.flatMap((w) =>
+      Array.from({ length: Math.min(w.workerProcesses ?? 1, IO_LOG_MAX_PROCESSES) }, (_, i) =>
+        withTimeout(
+          apiGet<{ items?: { events?: Record<string, unknown>[] }[] }>(
+            `/w/${encodeURIComponent(w.id)}/system/logs/${encodeURIComponent(`worker/${i}/cribl.log`)}?${qs.toString()}`,
+          ),
+          LOGS_SEARCH_TIMEOUT_MS,
+        )
+          .then((res) =>
+            (res.items ?? []).flatMap((item) => item.events ?? []).map((e) => ({ e, host: w.info.hostname ?? w.id })),
+          )
+          .catch(() => []),
+      ),
+    ),
+  );
+
+  const groups = new Map<string, IOLogGroup>();
+  for (const { e, host } of perFile.flat()) {
+    const level = typeof e.level === 'string' ? e.level : 'info';
+    const message = typeof e.message === 'string' ? e.message : '';
+    const reason = reasonText(e.reason ?? e.error);
+    const time = Date.parse(String(e.time ?? '')) || 0;
+    const key = `${level}|${message}|${reason ?? ''}`;
+    const g = groups.get(key) ?? { level, message, reason, count: 0, last: 0, hosts: [] };
+    g.count += typeof e.count === 'number' ? e.count : 1;
+    g.last = Math.max(g.last, time);
+    if (!g.hosts.includes(host)) g.hosts.push(host);
+    groups.set(key, g);
+  }
+  const rank = (l: string) => (l === 'error' ? 0 : l === 'warn' ? 1 : 2);
+  return {
+    nodes: nodes.length,
+    groups: [...groups.values()].sort((a, b) => rank(a.level) - rank(b.level) || b.last - a.last),
+  };
+}
+
+// A group whose nodes are down never answers, and the platform only gives up
+// after 30s — as long as the auto-refresh interval, so the page would sit on
+// "Loading" forever. Give up on a silent group well before the next refresh.
+const LOGS_SEARCH_TIMEOUT_MS = 12_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`No response after ${ms / 1000}s`)), ms)),
+  ]);
+}
+
 async function fetchLogEvents(params: Record<string, string>): Promise<Record<string, unknown>[]> {
   const qs = new URLSearchParams(params);
   try {
@@ -1371,11 +1767,14 @@ async function fetchLogEvents(params: Record<string, string>): Promise<Record<st
     // check explicitly or a bad group/path silently reads as "no data". A
     // successful response is `{ items: [{ events: [...] }] }` — one item per
     // matched log file (e.g. cribl.log and cribl_stderr.log for one group).
-    const res = await apiGet<{
-      status?: string;
-      message?: string;
-      items?: { events?: Record<string, unknown>[] }[];
-    }>(`/system/logs/search?${qs.toString()}`);
+    const res = await withTimeout(
+      apiGet<{
+        status?: string;
+        message?: string;
+        items?: { events?: Record<string, unknown>[] }[];
+      }>(`/system/logs/search?${qs.toString()}`),
+      LOGS_SEARCH_TIMEOUT_MS,
+    );
     if (res.status === 'error') {
       console.warn(`/system/logs/search (${qs.toString()}):`, res.message);
       return [];

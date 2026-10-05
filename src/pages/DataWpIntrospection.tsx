@@ -12,7 +12,7 @@ import {
   getWorkers,
   type InSplitBy,
 } from '../api/client';
-import { Card, Loading, ErrorBanner, ChipSelect } from '../components/ui';
+import { Card, Loading, ErrorBanner, MultiSelect } from '../components/ui';
 import { TimeSeriesChart, type ChartSeries } from '../components/charts/TimeSeriesChart';
 import { splitToSeries, type SplitSeries } from '../lib/metrics';
 import { formatBytes, formatCount } from '../lib/format';
@@ -207,7 +207,12 @@ export function DataWpIntrospection() {
                 Loading…
               </span>
             ) : (
-              <ChipSelect options={(destOptions.data ?? []).map((d) => d.id)} selected={destSel} onChange={setDestSel} />
+              <MultiSelect
+                noun="destinations"
+                options={(destOptions.data ?? []).map((d) => d.id)}
+                selected={destSel}
+                onChange={setDestSel}
+              />
             )}
           </div>
 
@@ -218,7 +223,12 @@ export function DataWpIntrospection() {
                 Loading…
               </span>
             ) : (
-              <ChipSelect options={(srcOptions.data ?? []).map((s) => s.id)} selected={srcSel} onChange={setSrcSel} />
+              <MultiSelect
+                noun="sources"
+                options={(srcOptions.data ?? []).map((s) => s.id)}
+                selected={srcSel}
+                onChange={setSrcSel}
+              />
             )}
           </div>
         </div>

@@ -1,9 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useApp } from '../state/AppContext';
 import { useAsync } from '../hooks/useAsync';
 import { getWorkers, getSystemInfo, getNodeMetrics, type NodePoint } from '../api/client';
 import { Card, StatTile, Loading, ErrorBanner, HealthBadge, Meter } from '../components/ui';
 import { Sparkline } from '../components/charts/Sparkline';
+import { HostMap, NodeDrawer } from '../components/FleetMap';
+import { summarizeGroups } from '../lib/fleet';
 import { formatBytes, formatDuration, timeAgo } from '../lib/format';
 import type { WorkerNode } from '../api/types';
 
@@ -50,7 +52,8 @@ function computeDrift(
 }
 
 export function Nodes() {
-  const { group, range, tick, groups } = useApp();
+  const { group, setGroup, range, tick, groups } = useApp();
+  const [openNode, setOpenNode] = useState<WorkerNode | null>(null);
   const workers = useAsync(() => getWorkers(), [tick]);
   const sys = useAsync(() => getSystemInfo(), [tick]);
 
@@ -78,6 +81,13 @@ export function Nodes() {
       return Object.fromEntries(pairs);
     },
     [sparkIds.join(','), sparkRange, tick],
+  );
+
+  // Node health only here — Source / Destination health lives on the Overview map.
+  const fleet = useMemo(
+    () =>
+      summarizeGroups(group === 'all' ? groups : groups.filter((g) => g.id === group), workers.data ?? [], [], []),
+    [groups, group, workers.data],
   );
 
   const healthy = nodes.filter((w) => w.status === 'healthy' && !w.disconnected).length;
@@ -234,6 +244,21 @@ export function Nodes() {
         )}
       </Card>
 
+      <Card title="Node Map" note="one hexagon per node · click one for its detail">
+        {workers.loading && !workers.data ? (
+          <Loading height={140} />
+        ) : (
+          <HostMap
+            summaries={fleet}
+            selected={group}
+            onSelectGroup={setGroup}
+            onSelectNode={setOpenNode}
+            tick={tick}
+            showIO={false}
+          />
+        )}
+      </Card>
+
       <Card title="Worker & Edge Nodes">
         {workers.loading && !workers.data ? (
           <Loading />
@@ -272,7 +297,7 @@ export function Nodes() {
                       ? (1 - w.info.freeDiskSpace / w.info.totalDiskSpace) * 100
                       : 0;
                   return (
-                    <tr key={w.id}>
+                    <tr key={w.id} className="row-expandable" onClick={() => setOpenNode(w)}>
                       <td className="id-cell">{w.info.hostname ?? w.id.slice(0, 14)}</td>
                       <td>
                         <span className="type-chip">{w.group}</span>
@@ -306,6 +331,8 @@ export function Nodes() {
           </div>
         )}
       </Card>
+
+      {openNode && <NodeDrawer node={openNode} onClose={() => setOpenNode(null)} onSelectGroup={setGroup} />}
     </>
   );
 }
