@@ -1,7 +1,8 @@
 # Product API access declaration for CriblVision.
 # At install time, admins see exactly which platform resources the app will use.
-# All monitoring calls are read-only; the only writes are Notification CRUD,
-# which powers the Email Alerts page (native Cribl notifications).
+# All monitoring calls are read-only; the only writes are behind the Alerts page:
+# Notification CRUD (native Cribl notifications) and the scheduled searches the
+# alert catalog creates in Cribl Search.
 
 policies:
   # Worker groups / edge fleets inventory
@@ -82,3 +83,26 @@ policies:
     actions: ['GET', 'POST']
   - object: '/m/:gid/notifications/*'
     actions: ['GET', 'PATCH', 'DELETE']
+
+  # Alert catalog — CriblVision creates scheduled searches in Cribl Search (always
+  # the default_search group) with an email notification, and reads the existing
+  # ones to show their status and P1/P2/P3 label.
+  - object: '/m/:gid/search/saved'
+    actions: ['GET', 'POST']
+  - object: '/m/:gid/search/saved/*'
+    actions: ['GET', 'POST', 'PATCH', 'DELETE']
+
+  # Alert drill-in — "Run search" executes an alert's query once in Cribl Search
+  # and shows the rows inline, so its logic can be checked or edited safely.
+  - object: '/m/:gid/search/jobs'
+    actions: ['POST']
+  - object: '/m/:gid/search/jobs/*'
+    actions: ['GET']
+
+  # Source / Destination drill-in — reads what a group's nodes logged about one
+  # Source or Destination (the reason it is unhealthy lives in the node's own log).
+  # Worker requests are authorized against the group-equivalent path.
+  - object: '/w/:wid/system/logs/*'
+    actions: ['GET']
+  - object: '/m/:gid/system/logs/*'
+    actions: ['GET']

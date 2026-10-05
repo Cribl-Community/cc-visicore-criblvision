@@ -2,23 +2,89 @@ import { Fragment, useMemo, useState } from 'react';
 import { useApp, useGroupIds } from '../state/AppContext';
 import { useAsync } from '../hooks/useAsync';
 import {
-  getInputStatuses,
-  getOutputStatuses,
-  getTopInputs,
-  getTopOutputs,
+  getIOStatuses,
+  getIOVolumes,
   getMessages,
   getOutputPQStats,
   getInputPQStats,
   streamLink,
-  type TopItem,
-  type IOStatusWithGroup,
   type OutputPQStat,
 } from '../api/client';
 import type { SystemMessage } from '../api/types';
+import { getIOLogs, getWorkers } from '../api/client';
 import { Card, StatTile, Loading, ErrorBanner, HealthBadge } from '../components/ui';
-import { HealthDonut } from '../components/charts/HealthDonut';
+import { GroupHealthList } from '../components/FleetMap';
+import { nodeHealthy } from '../lib/fleet';
 import { countHealth, normHealth } from '../lib/metrics';
-import { formatBytes, formatCount, formatTime } from '../lib/format';
+import { formatBytes, formatCount, formatTime, timeAgo } from '../lib/format';
+
+const IO_LOG_RANGE_SEC = 3600;
+const IO_LOG_ROWS = 6;
+
+/** What the group's nodes logged about one Source/Destination in the last hour. */
+function RelatedLogs({ kind, id, group }: { kind: 'input' | 'output'; id: string; group: string }) {
+  // Loaded once when the row is opened — these are several node requests, so
+  // they don't ride the 30s auto-refresh.
+  const logs = useAsync(() => getIOLogs(kind, id, group, IO_LOG_RANGE_SEC), [kind, id, group]);
+  const now = Date.now();
+  return (
+    <>
+      <div className="section-title" style={{ margin: '14px 0 8px' }}>
+        Node Log · last hour
+      </div>
+      {logs.loading && !logs.data ? (
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          Reading node logs…
+        </div>
+      ) : logs.error ? (
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          Could not read node logs: {logs.error}
+        </div>
+      ) : !logs.data || logs.data.nodes === 0 ? (
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          This group has no connected nodes, so there is no node log to read.
+        </div>
+      ) : logs.data.groups.length === 0 ? (
+        <div className="muted" style={{ fontSize: 12.5 }}>
+          Nothing logged about this {kind === 'input' ? 'source' : 'destination'} on {logs.data.nodes} node
+          {logs.data.nodes === 1 ? '' : 's'} in the last hour.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {logs.data.groups.slice(0, IO_LOG_ROWS).map((g, i) => (
+            <div key={i} style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+              <span
+                className={`sev ${g.level === 'error' ? 'sev-error' : g.level === 'warn' ? 'sev-warn' : 'sev-info'}`}
+                style={{ marginTop: 1 }}
+              >
+                {g.level}
+              </span>
+              <div style={{ fontSize: 13, minWidth: 0 }}>
+                <div>
+                  {g.message}
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {' '}
+                    · {g.count}× · last {g.last ? timeAgo(g.last, now) : '—'} · {g.hosts.join(', ')}
+                  </span>
+                </div>
+                {g.reason && (
+                  <div className="mono muted" style={{ fontSize: 12, wordBreak: 'break-word' }}>
+                    {g.reason}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {logs.data.groups.length > IO_LOG_ROWS && (
+            <div className="muted" style={{ fontSize: 12 }}>
+              + {logs.data.groups.length - IO_LOG_ROWS} more distinct messages
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
 
 interface Row {
   id: string;
@@ -42,17 +108,16 @@ type SortKey = 'id' | 'group' | 'type' | 'health' | 'bytes' | 'events' | 'droppe
 const HEALTH_ORDER: Record<string, number> = { Red: 0, Yellow: 1, Green: 2, Unknown: 3 };
 
 export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
-  const { group, range, tick } = useApp();
+  const { group, setGroup, range, tick } = useApp();
   const groupIds = useGroupIds();
   const idKey = groupIds.join(',');
   const isSource = kind === 'source';
 
-  const status = useAsync<IOStatusWithGroup[]>(
-    () => (isSource ? getInputStatuses(groupIds) : getOutputStatuses(groupIds)),
-    [idKey, tick, kind],
-  );
-  const tops = useAsync<TopItem[]>(
-    () => (isSource ? getTopInputs(group, range.rangeSeconds) : getTopOutputs(group, range.rangeSeconds)),
+  const loaded = useAsync(() => getIOStatuses(isSource ? 'input' : 'output', groupIds), [idKey, tick, kind]);
+  const status = { ...loaded, data: loaded.data?.items ?? null };
+  const failedGroups = loaded.data?.failed ?? [];
+  const volumes = useAsync(
+    () => getIOVolumes(isSource ? 'input' : 'output', group, range.rangeSeconds),
     [group, range.id, tick, kind],
   );
   const msgs = useAsync<SystemMessage[]>(() => getMessages(), [tick]);
@@ -67,7 +132,7 @@ export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
   );
 
   const [q, setQ] = useState('');
-  const [filter, setFilter] = useState<'all' | 'Red' | 'Yellow' | 'Green'>('all');
+  const [filter, setFilter] = useState<'all' | 'Red' | 'Yellow' | 'Green' | 'bp'>('all');
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'bytes', dir: -1 });
   const [open, setOpen] = useState<Set<string>>(new Set());
 
@@ -93,12 +158,6 @@ export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
     );
   }
 
-  const volById = useMemo(() => {
-    const m = new Map<string, TopItem>();
-    for (const t of tops.data ?? []) m.set(t.id, t);
-    return m;
-  }, [tops.data]);
-
   const pqByKey = useMemo(() => {
     const m = new Map<string, OutputPQStat>();
     for (const s of pqStats.data ?? []) m.set(`${s.group}::${s.id}`, s);
@@ -107,7 +166,7 @@ export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
 
   const rows: Row[] = useMemo(() => {
     const list = (status.data ?? []).map((s) => {
-      const v = volById.get(s.id);
+      const v = volumes.data?.get(`${s.group}::${s.id}`);
       const pq = pqByKey.get(`${s.group}::${s.id}`);
       return {
         id: s.id,
@@ -126,13 +185,23 @@ export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
       };
     });
     return list;
-  }, [status.data, volById, pqByKey]);
+  }, [status.data, volumes.data, pqByKey]);
 
   const counts = countHealth(rows.map((r) => r.health));
 
+  // Connected nodes per group — a group with none explains why its objects are down.
+  const workers = useAsync(() => getWorkers(), [tick]);
+  const nodeCounts = useMemo(() => {
+    if (!workers.data) return null;
+    const m = new Map<string, number>();
+    for (const w of workers.data) if (nodeHealthy(w)) m.set(w.group, (m.get(w.group) ?? 0) + 1);
+    return m;
+  }, [workers.data]);
+
   const shown = useMemo(() => {
     let list = rows;
-    if (filter !== 'all') list = list.filter((r) => normHealth(r.health) === filter);
+    if (filter === 'bp') list = list.filter((r) => r.bpState === 2);
+    else if (filter !== 'all') list = list.filter((r) => normHealth(r.health) === filter);
     if (q.trim()) {
       const needle = q.toLowerCase();
       list = list.filter((r) => r.id.toLowerCase().includes(needle) || r.type.toLowerCase().includes(needle));
@@ -172,18 +241,30 @@ export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
           label={`Total ${isSource ? 'Sources' : 'Destinations'}`}
           value={String(counts.total)}
           accent="var(--accent)"
+          active={filter === 'all'}
+          onClick={() => setFilter('all')}
         />
-        <StatTile label="Healthy" value={String(counts.Green)} accent="var(--good)" />
+        <StatTile
+          label="Healthy"
+          value={String(counts.Green)}
+          accent="var(--good)"
+          active={filter === 'Green'}
+          onClick={() => setFilter(filter === 'Green' ? 'all' : 'Green')}
+        />
         <StatTile
           label="Unhealthy"
           value={String(counts.Red)}
           accent={counts.Red > 0 ? 'var(--critical)' : 'var(--good)'}
           foot={counts.Yellow > 0 ? <span>{counts.Yellow} warning</span> : undefined}
+          active={filter === 'Red'}
+          onClick={() => setFilter(filter === 'Red' ? 'all' : 'Red')}
         />
         <StatTile
           label="Backpressured"
           value={String(bpNow)}
           accent={bpNow > 0 ? 'var(--critical)' : 'var(--good)'}
+          active={filter === 'bp'}
+          onClick={() => setFilter(filter === 'bp' ? 'all' : 'bp')}
           foot={
             totalPQ > 0 ? (
               <span>{formatBytes(totalPQ)} queued to disk</span>
@@ -196,9 +277,27 @@ export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
         />
       </div>
 
+      {failedGroups.length > 0 && (
+        <ErrorBanner
+          message={`Could not load ${isSource ? 'sources' : 'destinations'} for ${failedGroups.join(', ')} — ${
+            failedGroups.length === 1 ? 'that group is' : 'those groups are'
+          } missing below, not healthy.`}
+        />
+      )}
+
       <div className="grid grid-3">
-        <Card title="Health Distribution">
-          {status.loading && !status.data ? <Loading height={150} /> : <HealthDonut counts={counts} />}
+        <Card title="Health by Worker Group" note="click to focus">
+          {status.loading && !status.data ? (
+            <Loading height={150} />
+          ) : (
+            <GroupHealthList
+              rows={rows}
+              noun={isSource ? 'sources' : 'destinations'}
+              nodeCounts={nodeCounts}
+              selected={group}
+              onSelectGroup={setGroup}
+            />
+          )}
         </Card>
         <Card
           title={`${isSource ? 'Sources' : 'Destinations'}`}
@@ -206,13 +305,21 @@ export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
           right={
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <div className="pill-tabs">
-                {(['all', 'Red', 'Yellow', 'Green'] as const).map((f) => (
+                {(['all', 'Red', 'Yellow', 'Green', 'bp'] as const).map((f) => (
                   <button
                     key={f}
                     className={`pill-tab ${filter === f ? 'active' : ''}`}
                     onClick={() => setFilter(f)}
                   >
-                    {f === 'all' ? 'All' : f === 'Red' ? 'Unhealthy' : f === 'Yellow' ? 'Warning' : 'Healthy'}
+                    {f === 'all'
+                      ? 'All'
+                      : f === 'Red'
+                        ? 'Unhealthy'
+                        : f === 'Yellow'
+                          ? 'Warning'
+                          : f === 'Green'
+                            ? 'Healthy'
+                            : 'Backpressured'}
                   </button>
                 ))}
               </div>
@@ -376,6 +483,7 @@ export function IOPage({ kind }: { kind: 'source' | 'destination' }) {
                                         )}
                                       </>
                                     )}
+                                    <RelatedLogs kind={isSource ? 'input' : 'output'} id={r.id} group={r.group} />
                                   </div>
                                 );
                               })()}

@@ -175,14 +175,28 @@ export function Jobs() {
   return (
     <>
       <div className="grid grid-4">
-        <StatTile label="Job Runs" value={String(rows.length)} accent="var(--accent)" />
+        <StatTile
+          label="Job Runs"
+          value={String(rows.length)}
+          accent="var(--accent)"
+          active={filter === 'all'}
+          onClick={() => setFilter('all')}
+        />
         <StatTile
           label="Failed"
           value={String(failed.length)}
           accent={failed.length > 0 ? 'var(--critical)' : 'var(--good)'}
           foot={failed.length > 0 ? <span>needs attention</span> : <span>all clean</span>}
+          active={filter === 'failed'}
+          onClick={() => setFilter(filter === 'failed' ? 'all' : 'failed')}
         />
-        <StatTile label="In Flight" value={String(running.length)} accent="var(--series-in)" />
+        <StatTile
+          label="In Flight"
+          value={String(running.length)}
+          accent="var(--series-in)"
+          active={filter === 'running'}
+          onClick={() => setFilter(filter === 'running' ? 'all' : 'running')}
+        />
         <StatTile
           label="Events Collected"
           value={formatCount(totalCollected)}

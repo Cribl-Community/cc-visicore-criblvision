@@ -135,6 +135,9 @@ export interface NotificationEmailConf {
   subject?: string;
   body?: string;
   emailRecipient?: { to?: string; cc?: string; bcc?: string };
+  /** Search alerts only: attach the triggering result rows to the email. */
+  includeResults?: boolean;
+  attachmentType?: string;
 }
 
 /** A native Cribl Notification (condition → targets), group-scoped. */
@@ -146,6 +149,27 @@ export interface CriblNotification {
   /** Condition-specific config (name, timeWindow, dataVolume, usageThreshold…). */
   conf?: Record<string, unknown>;
   targetConfigs?: { id: string; conf?: NotificationEmailConf }[];
+}
+
+/**
+ * A Cribl Search saved search. With a schedule and at least one notification
+ * it acts as an alert: Cribl runs the query on the cron and emails when the
+ * trigger condition matches.
+ */
+export interface SavedSearch {
+  id: string;
+  name?: string;
+  description?: string;
+  query: string;
+  earliest?: string;
+  latest?: string;
+  schedule?: {
+    enabled?: boolean;
+    cronSchedule?: string;
+    tz?: string;
+    keepLastN?: number;
+    notifications?: { disabled?: boolean; items?: CriblNotification[] };
+  };
 }
 
 export interface SystemInfo {

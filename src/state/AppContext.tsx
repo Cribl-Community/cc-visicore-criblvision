@@ -3,6 +3,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -50,14 +51,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tick, setTick] = useState(0);
   const [lastRefresh, setLastRefresh] = useState(() => Date.now());
 
+  // The group inventory reloads on every refresh, so a new group appears — and a
+  // failed first load recovers — without reloading the page. A failed reload
+  // keeps the groups already known.
+  const prefsRestored = useRef(false);
   useEffect(() => {
     let alive = true;
-    Promise.all([getGroups().catch(() => [] as Group[]), loadPrefs()])
+    Promise.all([getGroups().catch(() => null), loadPrefs()])
       .then(([gs, prefs]) => {
-        if (!alive) return;
+        if (!alive || !gs) return;
         // Only groups that actually process data: stream + edge fleets.
         const usable = gs.filter((g) => g.type === 'stream' || g.type === 'edge');
         setGroups(usable);
+        if (prefsRestored.current) return;
+        prefsRestored.current = true;
         // Restore saved selections, ignoring a group that no longer exists.
         if (prefs.group && (prefs.group === 'all' || usable.some((g) => g.id === prefs.group))) {
           setGroup(prefs.group);
@@ -70,7 +77,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [tick]);
 
   useEffect(() => {
     const t = setInterval(() => {

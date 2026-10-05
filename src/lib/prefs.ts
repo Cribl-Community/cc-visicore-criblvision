@@ -14,6 +14,9 @@ export interface Prefs {
   stallSeconds?: number;
   /** Data Value downstream cost, $/GB. */
   priceGB?: number;
+  /** Search alerts: who receives the email (never shipped — set per install). */
+  alertEmailTo?: string;
+  alertEmailCc?: string;
 }
 
 const API_URL = (typeof window !== 'undefined' && window.CRIBL_API_URL) || '';
@@ -32,6 +35,8 @@ function sanitize(v: unknown): Prefs {
   if (typeof o.rangeId === 'string') p.rangeId = o.rangeId;
   if (typeof o.stallSeconds === 'number') p.stallSeconds = o.stallSeconds;
   if (typeof o.priceGB === 'number') p.priceGB = o.priceGB;
+  if (typeof o.alertEmailTo === 'string') p.alertEmailTo = o.alertEmailTo;
+  if (typeof o.alertEmailCc === 'string') p.alertEmailCc = o.alertEmailCc;
   return p;
 }
 

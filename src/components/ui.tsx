@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { Health } from '../api/types';
 import { normHealth } from '../lib/metrics';
 
@@ -38,6 +38,8 @@ export function StatTile({
   delta,
   accent,
   icon,
+  onClick,
+  active,
 }: {
   label: string;
   value: string;
@@ -46,9 +48,24 @@ export function StatTile({
   delta?: { text: string; dir: 'up' | 'down' | 'flat' };
   accent?: string;
   icon?: ReactNode;
+  /** Makes the tile a toggle, e.g. to filter the page down to what it counts. */
+  onClick?: () => void;
+  active?: boolean;
 }) {
+  const toggle = onClick && {
+    role: 'button',
+    tabIndex: 0,
+    'aria-pressed': !!active,
+    onClick,
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onClick();
+      }
+    },
+  };
   return (
-    <div className="stat">
+    <div className={`stat${onClick ? ' stat-clickable' : ''}${active ? ' active' : ''}`} {...toggle}>
       <div className="stat-row">
         {accent && <span className="stat-accent" style={{ background: accent }} />}
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -193,6 +210,204 @@ export function ChipSelect({
           {id}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ---- Dropdown multiselect -------------------------------------------------
+/**
+ * Searchable dropdown for filtering to specific ids — the compact alternative
+ * to ChipSelect when the option list is too long to lay out as chips. Same
+ * contract: `null` selection means "all". Picked ids show as removable chips.
+ */
+export function MultiSelect({
+  options,
+  selected,
+  onChange,
+  noun,
+}: {
+  options: string[];
+  selected: Set<string> | null;
+  onChange: (next: Set<string> | null) => void;
+  /** Plural name of what is being picked, e.g. "destinations". */
+  noun: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  function toggle(id: string) {
+    const next = new Set(selected ?? []);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onChange(next.size === 0 ? null : next);
+  }
+
+  if (options.length === 0) return <span className="muted" style={{ fontSize: 12.5 }}>No data yet</span>;
+
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? options.filter((id) => id.toLowerCase().includes(needle)) : options;
+  const picked = options.filter((id) => selected?.has(id));
+
+  return (
+    <div className="multi" ref={root}>
+      <button
+        type="button"
+        className="select multi-button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {selected == null ? `All ${noun} (${options.length})` : `${picked.length} of ${options.length} ${noun}`}
+        <span className="multi-caret">▾</span>
+      </button>
+      {picked.length > 0 && (
+        <div className="chip-select">
+          {picked.map((id) => (
+            <button key={id} className="chip active" onClick={() => toggle(id)} title={`Remove ${id}`}>
+              {id} ✕
+            </button>
+          ))}
+          <button className="chip" onClick={() => onChange(null)}>
+            Clear
+          </button>
+        </div>
+      )}
+      {open && (
+        <div className="multi-menu">
+          <input
+            className="select"
+            autoFocus
+            placeholder={`Search ${noun}…`}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          <div className="multi-list" role="listbox" aria-multiselectable="true">
+            {shown.map((id) => (
+              <label key={id} className="multi-option" title={id}>
+                <input type="checkbox" checked={!!selected?.has(id)} onChange={() => toggle(id)} />
+                <span>{id}</span>
+              </label>
+            ))}
+            {shown.length === 0 && (
+              <div className="muted" style={{ fontSize: 12.5, padding: 6 }}>
+                No {noun} match
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Searchable single select ---------------------------------------------
+/**
+ * A dropdown you can also type into: opens a list of options with a search box
+ * on top, so a long list (routes, pipelines) can be narrowed by name. `null`
+ * means "all".
+ */
+export function SearchSelect({
+  options,
+  value,
+  onChange,
+  noun,
+}: {
+  options: string[];
+  value: string | null;
+  onChange: (next: string | null) => void;
+  /** Plural name of what is being picked, e.g. "routes". */
+  noun: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  function pick(next: string | null) {
+    onChange(next);
+    setOpen(false);
+    setQ('');
+  }
+
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? options.filter((id) => id.toLowerCase().includes(needle)) : options;
+
+  return (
+    <div className="multi" ref={root}>
+      <button
+        type="button"
+        className="select multi-button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="multi-value">{value ?? `All ${noun} (${options.length})`}</span>
+        <span className="multi-caret">▾</span>
+      </button>
+      {open && (
+        <div className="multi-menu">
+          <input
+            className="select"
+            autoFocus
+            placeholder={`Type to find ${noun}…`}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setOpen(false);
+              // Enter takes the top match, so typing a name and pressing Enter is enough.
+              if (e.key === 'Enter' && shown.length > 0) pick(shown[0]);
+            }}
+          />
+          <div className="multi-list" role="listbox">
+            {!needle && (
+              <button type="button" className={`multi-option${value == null ? ' active' : ''}`} onClick={() => pick(null)}>
+                All {noun}
+              </button>
+            )}
+            {shown.map((id) => (
+              <button
+                type="button"
+                key={id}
+                className={`multi-option${id === value ? ' active' : ''}`}
+                title={id}
+                onClick={() => pick(id)}
+              >
+                <span>{id}</span>
+              </button>
+            ))}
+            {shown.length === 0 && (
+              <div className="muted" style={{ fontSize: 12.5, padding: 6 }}>
+                No {noun} match
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

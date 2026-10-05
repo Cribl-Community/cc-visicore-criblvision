@@ -3,7 +3,7 @@ import { useApp } from '../state/AppContext';
 import { useAsync } from '../hooks/useAsync';
 import { getRouteSeries, getPipelineSeries } from '../api/client';
 import type { MetricRow } from '../api/types';
-import { Card, StatTile, Loading, ErrorBanner } from '../components/ui';
+import { Card, StatTile, Loading, ErrorBanner, SearchSelect } from '../components/ui';
 import { TimeSeriesChart } from '../components/charts/TimeSeriesChart';
 import { sumAlias, sumPointsByBucket } from '../lib/metrics';
 import { formatBytes, formatCount, formatPct, reductionPct } from '../lib/format';
@@ -103,16 +103,12 @@ export function RoutePipelineReductions() {
           </div>
           <div className="filter-group">
             <span className="control-label">{entityLabel}</span>
-            <div className="control">
-              <select className="select" value={selected} onChange={(e) => setSelected(e.target.value)}>
-                <option value="all">All</option>
-                {entities.map((id) => (
-                  <option key={id} value={id}>
-                    {id}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <SearchSelect
+              noun={isRoute ? 'routes' : 'pipelines'}
+              options={entities}
+              value={selected === 'all' || !entities.includes(selected) ? null : selected}
+              onChange={(next) => setSelected(next ?? 'all')}
+            />
           </div>
         </div>
         {!isRoute && (

@@ -71,7 +71,13 @@ export function Pipelines() {
     <>
       <div className="grid grid-4">
         <StatTile label="Pipelines Reporting" value={String(rows.length)} accent="var(--accent)" />
-        <StatTile label="Events In" value={formatCount(totalIn)} accent="var(--series-in)" />
+        <StatTile
+          label="Events In"
+          value={formatCount(totalIn)}
+          accent="var(--series-in)"
+          active={sort.key === 'eventsIn'}
+          onClick={() => setSort({ key: 'eventsIn', dir: -1 })}
+        />
         <StatTile
           label="Dropped"
           value={formatCount(totalDropped)}
@@ -81,11 +87,15 @@ export function Pipelines() {
               {totalIn > 0 ? formatPct(totalDropped / totalIn, 1).replace('+', '') : '0%'} of events in
             </span>
           }
+          active={sort.key === 'dropped'}
+          onClick={() => setSort({ key: 'dropped', dir: -1 })}
         />
         <StatTile
           label="Errors"
           value={formatCount(totalErrors)}
           accent={totalErrors > 0 ? 'var(--critical)' : 'var(--good)'}
+          active={sort.key === 'errors'}
+          onClick={() => setSort({ key: 'errors', dir: -1 })}
         />
       </div>
 
