@@ -2,7 +2,7 @@
 
 **Health monitoring for Cribl deployments.**
 
-![CriblVision — Deployment Overview](https://raw.githubusercontent.com/Cribl-Community/cc-visicore-criblvision/main/docs/overview.png)
+![CriblVision — Deployment Overview](https://raw.githubusercontent.com/Cribl-Community/cc-visicore-criblvision/main/docs/overview.svg)
 
 ## Install
 

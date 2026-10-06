@@ -134,9 +134,10 @@ a {
   padding: 6px 10px 18px;
 }
 .brand-mark {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   flex: none;
+  border-radius: 9px;
 }
 .brand-name {
   font-weight: 700;
