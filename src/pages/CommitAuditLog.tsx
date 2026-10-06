@@ -4,7 +4,7 @@ import { useAsync } from '../hooks/useAsync';
 import { getCommitHistory, getCommitDetail, type CommitDetail, type DiffFileEntry } from '../api/client';
 import { Card, StatTile, Loading, ErrorBanner } from '../components/ui';
 import { TimeSeriesChart } from '../components/charts/TimeSeriesChart';
-import { formatCount, formatTime, formatDate } from '../lib/format';
+import { formatCount, formatTime, formatDate, timeAgo } from '../lib/format';
 
 const COMMIT_FETCH_COUNT = 300;
 
@@ -65,8 +65,11 @@ function DiffFile({ file }: { file: DiffFileEntry }) {
  * to the selected range client-side.
  */
 export function CommitAuditLog() {
-  const { range, tick } = useApp();
+  const { range, setRangeId, tick } = useApp();
   const [q, setQ] = useState('');
+  // Commits are sparse — a quiet few hours is normal — so the page can also
+  // show every commit that was fetched, whatever the time range says.
+  const [allFetched, setAllFetched] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [details, setDetails] = useState<Map<string, CommitDetail>>(new Map());
   const [detailErrors, setDetailErrors] = useState<Map<string, string>>(new Map());
@@ -74,7 +77,9 @@ export function CommitAuditLog() {
 
   const commits = useAsync(() => getCommitHistory(COMMIT_FETCH_COUNT), [tick]);
 
-  const sinceMs = Date.now() - range.rangeSeconds * 1000;
+  const latest = commits.data?.[0];
+  const oldestMs = commits.data?.length ? commits.data[commits.data.length - 1].date : Date.now();
+  const sinceMs = allFetched ? oldestMs : Date.now() - range.rangeSeconds * 1000;
   const needle = q.trim().toLowerCase();
   const filtered = useMemo(() => {
     return (commits.data ?? []).filter((c) => {
@@ -83,9 +88,11 @@ export function CommitAuditLog() {
       return c.authorName.toLowerCase().includes(needle) || c.message.toLowerCase().includes(needle);
     });
   }, [commits.data, sinceMs, needle]);
+  const scopeLabel = allFetched ? `last ${formatCount(commits.data?.length ?? 0)} commits` : range.label.toLowerCase();
 
   const timeSeries = useMemo(() => {
-    const bucketMs = Math.max(3600_000, range.bucketSeconds * 1000);
+    // All fetched commits can span months, so those are counted per day.
+    const bucketMs = allFetched ? 86_400_000 : Math.max(3600_000, range.bucketSeconds * 1000);
     const byBucket = new Map<number, number>();
     for (const c of filtered) {
       const b = sinceMs + Math.floor((c.date - sinceMs) / bucketMs) * bucketMs;
@@ -93,7 +100,7 @@ export function CommitAuditLog() {
     }
     const times = [...byBucket.keys()].sort((a, b) => a - b);
     return [{ name: 'Commits', color: 'var(--accent)', points: times.map((t) => ({ t, v: byBucket.get(t) ?? 0 })) }];
-  }, [filtered, sinceMs, range.bucketSeconds]);
+  }, [filtered, sinceMs, range.bucketSeconds, allFetched]);
 
   const authorCount = useMemo(
     () => new Set(filtered.map((c) => c.authorEmail || c.authorName)).size,
@@ -119,7 +126,7 @@ export function CommitAuditLog() {
     }
   }
 
-  const dateAxis = range.rangeSeconds > 86400;
+  const dateAxis = allFetched || range.rangeSeconds > 86400;
 
   return (
     <>
@@ -135,6 +142,17 @@ export function CommitAuditLog() {
               style={{ width: '100%', maxWidth: 320 }}
             />
           </div>
+          <div className="filter-group">
+            <span className="control-label">Show</span>
+            <div className="pill-tabs">
+              <button className={`pill-tab ${!allFetched ? 'active' : ''}`} onClick={() => setAllFetched(false)}>
+                {range.label}
+              </button>
+              <button className={`pill-tab ${allFetched ? 'active' : ''}`} onClick={() => setAllFetched(true)}>
+                All fetched
+              </button>
+            </div>
+          </div>
         </div>
         <div className="muted" style={{ marginTop: 14, fontSize: 12.5, lineHeight: 1.5 }}>
           Shows the config git commit history (<code>GET /version</code>) — there's no deploy-history
@@ -145,7 +163,7 @@ export function CommitAuditLog() {
       </Card>
 
       <div className="grid grid-3">
-        <StatTile label="Commits" value={formatCount(filtered.length)} accent="var(--accent)" foot={<span>{range.label.toLowerCase()}</span>} />
+        <StatTile label="Commits" value={formatCount(filtered.length)} accent="var(--accent)" foot={<span>{scopeLabel}</span>} />
         <StatTile label="Authors" value={formatCount(authorCount)} accent="var(--series-3)" />
         <StatTile
           label="Fetched"
@@ -155,7 +173,7 @@ export function CommitAuditLog() {
         />
       </div>
 
-      <Card title="Commits Over Time" note={range.label}>
+      <Card title="Commits Over Time" note={scopeLabel}>
         {commits.loading && !commits.data ? (
           <Loading height={220} />
         ) : commits.error ? (
@@ -171,7 +189,29 @@ export function CommitAuditLog() {
         ) : commits.error ? (
           <ErrorBanner message={commits.error} />
         ) : filtered.length === 0 ? (
-          <div className="center-state" style={{ height: 120 }}>No commits in this window</div>
+          <div className="center-state">
+            <span>
+              {needle ? 'No commits match that search' : `No commits in the ${range.label.toLowerCase()}`}
+              {!needle && latest && (
+                <>
+                  {' '}
+                  — the most recent was {timeAgo(latest.date, Date.now())} by {latest.authorName}
+                </>
+              )}
+            </span>
+            {!allFetched && (
+              <div style={{ display: 'flex', gap: 8 }}>
+                {range.id !== '7d' && latest && Date.now() - latest.date < 7 * 86_400_000 && (
+                  <button className="btn btn-sm" onClick={() => setRangeId('7d')}>
+                    Show last 7 days
+                  </button>
+                )}
+                <button className="btn btn-sm" onClick={() => setAllFetched(true)}>
+                  Show all {formatCount(commits.data?.length ?? 0)} fetched
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="table-wrap">
             <table className="data">

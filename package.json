@@ -1,6 +1,6 @@
 {
   "name": "cc-visicore-criblvision",
-  "author": "VisiCore Tech - CriblPacks@VisiCoreTech.com",
+  "author": "Andrew Hendrix - CriblPacks@VisiCoreTech.com",
   "tags": {
     "product": [
       "edge",
@@ -12,7 +12,7 @@
     "createAppScriptVersion": "0.2.0"
   },
   "private": true,
-  "version": "1.5.0",
+  "version": "1.5.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

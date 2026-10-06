@@ -2,6 +2,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useApp, TIME_RANGES } from '../state/AppContext';
 import { IS_DEMO } from '../api/client';
 import { timeAgo } from '../lib/format';
+import logoUrl from '../assets/logo.png';
 import {
   IconOverview,
   IconThroughput,
@@ -74,18 +75,7 @@ const NAV = [
 ];
 
 function BrandMark() {
-  return (
-    <svg className="brand-mark" viewBox="0 0 32 32" fill="none">
-      <rect width="32" height="32" rx="8" fill="var(--accent)" />
-      <path
-        d="M6 16c2.4-4.2 6-6.3 10-6.3S23.6 11.8 26 16c-2.4 4.2-6 6.3-10 6.3S8.4 20.2 6 16z"
-        stroke="var(--accent-ink)"
-        strokeWidth="1.8"
-        fill="none"
-      />
-      <circle cx="16" cy="16" r="3.1" fill="var(--accent-ink)" />
-    </svg>
-  );
+  return <img className="brand-mark" src={logoUrl} alt="" />;
 }
 
 export function Layout() {
