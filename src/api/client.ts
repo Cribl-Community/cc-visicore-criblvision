@@ -1850,8 +1850,12 @@ export interface CommitDetail {
   files: DiffFileEntry[];
 }
 
+// `/version` dates look like "2026-10-02 15:14:34 +0000" — git's format, which
+// only some browsers parse. Rewrite it as ISO 8601 so every browser agrees.
 function parseCommitDate(v: unknown): number {
-  const ms = typeof v === 'string' ? Date.parse(v) : NaN;
+  if (typeof v !== 'string') return Date.now();
+  const iso = v.trim().replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) ?([+-]\d{2}):?(\d{2})$/, '$1T$2$3:$4');
+  const ms = Date.parse(iso);
   return Number.isFinite(ms) ? ms : Date.now();
 }
 
