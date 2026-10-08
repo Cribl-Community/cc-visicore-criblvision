@@ -59,8 +59,26 @@ delivers them. The app never routes, copies, or indexes your event data anywhere
 creates no datasets, pipelines, routes, or destinations.
 
 **Alert Catalog.** 23 alerts ship with the app. None is active until you enable it, and
-no recipient is shipped. Clicking **Enable** opens a popup where you pick the priority
-and how to be notified: an in-product **system notification**, an **email**, or both.
+no recipient is shipped. Clicking the alert's status switch opens a popup
+with the same options Cribl Search gives a scheduled search's notification: the priority,
+how far back it looks and how often it runs (presets or a cron expression), when it fires
+(a result-count comparison or a custom expression), where it goes (any configured
+notification target — the in-product **system notification**, **email**, a **webhook**,
+or any mix), the email's To / Cc / Bcc and subject, whether to include the search
+results and as what (inline table, CSV, or JSON), and the message body.
+**Add webhook target** creates a webhook notification target in Cribl without leaving
+the page, shaped for **ServiceNow** out of the box: an incident per fired alert via the
+Table API (alert name → short description, message and results → description,
+P1 / P2 / P3 → urgency and impact 1 / 2 / 3), or an event via Event Management
+(P1 / P2 / P3 → severity 1 / 2 / 3, search id as the message key for correlation), or any
+other HTTPS URL. Credentials are stored on the target in Cribl; the Leader does the
+posting, never the app. Every target has a **Test** button (and the webhook form a
+**Create & test**): it sends one real test notification through that target via a one-off
+scheduled search that Cribl's scheduler picks up within seconds — a test takes about 15–20
+seconds, most of it the search run — and reports whether the target accepted it, then
+removes the search. Webhook targets can be deleted from the same list (two clicks). The search is pinned to
+a three-minute window, so even an interrupted test can never keep firing, and leftovers
+are removed the next time the page loads.
 
 | Category | Alerts (default priority) |
 |---|---|
@@ -86,7 +104,10 @@ and how to be notified: an in-product **system notification**, an **email**, or 
   notification in the workspace — trigger, schedule, where it notifies, active or
   turned off — and lets you turn them off and on, label them, and drill in. Click any
   row (here or in the catalog) to see the search behind the alert, **Run search** to see
-  the rows it returns right now, and edit the query, look-back, or schedule in place.
+  the rows it returns right now, and edit the query, look-back, schedule, and every
+  notification option in place. The status switch is the on/off control: in the
+  catalog it enables an alert or removes it again (keeping your edits for next time),
+  and in the list below it pauses or resumes the schedule.
 - **Make it yours.** Edits to an alert's query, look-back, or schedule are kept when you
   enable it, and **Reset to default** brings the shipped version back. **Clone** creates
   a separate alert under your own name that you can change freely; alerts the app
@@ -111,7 +132,7 @@ alert catalog's scheduled searches):
 - `GET /w/:wid/system/metrics` — per‑node recent CPU / memory (sparklines, host map, node panel)
 - `GET /m/:gid/system/inputs|outputs` — per‑group Source/Destination config + authoritative health
 - `GET /m/:gid/jobs` — collection & scheduled job runs (states, failed tasks, cron)
-- `GET /notification-targets` — SMTP target inventory & delivery stats for the Alerts page
+- `GET|POST /notification-targets` — notification targets (email, system, webhook) for the Alerts page; POST creates the webhook targets (ServiceNow…) added from the alert dialog
 - `GET|POST|PATCH|DELETE /m/:gid/notifications` — the native Cribl Notifications that power email alerts
 - `GET|POST|PATCH|DELETE /m/default_search/search/saved` (+ `/:id/notifications`) — the scheduled searches behind the alert catalog, and their P1 / P2 / P3 labels
 - `POST /m/default_search/search/jobs`, `GET …/jobs/:id` and `…/results` — the one-off **Run search** in an alert's drill-in

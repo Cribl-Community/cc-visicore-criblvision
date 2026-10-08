@@ -77,8 +77,14 @@ policies:
 
   # Email Alerts page — CriblVision manages native Cribl Notifications wired to the
   # SMTP notification target; Cribl evaluates conditions and sends the email.
+  # POST lets the Alerts page create webhook targets (for example ServiceNow) that
+  # alerts are then sent to; the Leader does the posting, never the app.
   - object: '/notification-targets'
-    actions: ['GET']
+    actions: ['GET', 'POST']
+  # DELETE removes webhook targets from the same page (never the built-in
+  # system_email / system_notifications targets).
+  - object: '/notification-targets/*'
+    actions: ['GET', 'DELETE']
   - object: '/m/:gid/notifications'
     actions: ['GET', 'POST']
   - object: '/m/:gid/notifications/*'

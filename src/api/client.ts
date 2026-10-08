@@ -1267,15 +1267,56 @@ function saveDemoAlerts(items: NotificationWithGroup[]): void {
   }
 }
 
+const DEMO_TARGETS_KEY = 'criblvision-demo-targets';
+
+function loadDemoTargets(): NotificationTarget[] {
+  try {
+    const raw = localStorage.getItem(DEMO_TARGETS_KEY);
+    if (raw) return JSON.parse(raw) as NotificationTarget[];
+  } catch {
+    /* fall through */
+  }
+  return [];
+}
+
 /** Configured notification targets (email, in-product bulletin, webhooks…). */
 export async function getNotificationTargets(): Promise<NotificationTarget[]> {
   if (IS_DEMO) {
     return [
       { id: 'system_email', type: 'smtp', status: { health: 'Green', metrics: { totalSent: 7, errorCnt: 0 } } },
       { id: 'system_notifications', type: 'bulletin_message', status: { health: 'Green' } },
+      ...loadDemoTargets(),
     ];
   }
   return (await apiGet<{ items?: NotificationTarget[] }>('/notification-targets')).items ?? [];
+}
+
+/** Create a notification target (for example a webhook) that alerts can be sent to. */
+export async function createNotificationTarget(target: { id: string; type: string } & Record<string, unknown>): Promise<void> {
+  if (IS_DEMO) {
+    const items = await getNotificationTargets();
+    if (items.some((t) => t.id === target.id)) throw new Error(`A notification target named "${target.id}" already exists`);
+    try {
+      localStorage.setItem(DEMO_TARGETS_KEY, JSON.stringify([...loadDemoTargets(), { id: target.id, type: target.type, status: { health: 'Green' } }]));
+    } catch {
+      /* demo persistence is best-effort */
+    }
+    return;
+  }
+  await apiPost('/notification-targets', target);
+}
+
+/** Delete a notification target the app (or someone) created, for example an old webhook. */
+export async function deleteNotificationTarget(id: string): Promise<void> {
+  if (IS_DEMO) {
+    try {
+      localStorage.setItem(DEMO_TARGETS_KEY, JSON.stringify(loadDemoTargets().filter((t) => t.id !== id)));
+    } catch {
+      /* best-effort */
+    }
+    return;
+  }
+  await apiDelete(`/notification-targets/${encodeURIComponent(id)}`);
 }
 
 /** All Notifications across the given groups, each tagged with its group. */

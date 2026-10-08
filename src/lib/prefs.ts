@@ -17,6 +17,7 @@ export interface Prefs {
   /** Search alerts: who receives the email (never shipped — set per install). */
   alertEmailTo?: string;
   alertEmailCc?: string;
+  alertEmailBcc?: string;
 }
 
 const API_URL = (typeof window !== 'undefined' && window.CRIBL_API_URL) || '';
@@ -37,6 +38,7 @@ function sanitize(v: unknown): Prefs {
   if (typeof o.priceGB === 'number') p.priceGB = o.priceGB;
   if (typeof o.alertEmailTo === 'string') p.alertEmailTo = o.alertEmailTo;
   if (typeof o.alertEmailCc === 'string') p.alertEmailCc = o.alertEmailCc;
+  if (typeof o.alertEmailBcc === 'string') p.alertEmailBcc = o.alertEmailBcc;
   return p;
 }
 

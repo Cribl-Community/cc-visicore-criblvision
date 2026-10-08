@@ -1533,3 +1533,194 @@ button.multi-option {
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* ---- Alert status switch + notification editor --------------------------- */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.switch:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.switch-track {
+  position: relative;
+  width: 30px;
+  height: 17px;
+  flex: none;
+  border-radius: 17px;
+  background: var(--border-strong);
+  transition: background 0.15s;
+}
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.switch.on {
+  color: var(--text);
+}
+.switch.on .switch-track {
+  background: var(--accent);
+}
+.switch.on .switch-knob {
+  transform: translateX(13px);
+}
+.switch.warn .switch-track {
+  background: var(--warning);
+}
+.switch.warn .switch-knob {
+  transform: translateX(6px);
+}
+.switch:focus-visible .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.modal-wide {
+  max-width: 620px;
+}
+.notif-heading {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--muted);
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+.notif-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.notif-when {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(90px, 1fr);
+  gap: 8px;
+}
+.notif-when .select {
+  width: 100%;
+}
+.notif-when input.select,
+.notif-editor input.select,
+.notif-editor textarea.select {
+  cursor: text;
+}
+.notif-to-head {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+}
+.notif-to-head > .dk {
+  flex: 1;
+}
+.radio-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 4px 0 0 24px;
+  font-size: 12.5px;
+}
+.notif-message {
+  white-space: pre-wrap;
+}
+@media (max-width: 640px) {
+  .notif-when {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Collapsible sections inside the alert drill-in */
+.logic-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.section-toggle:hover {
+  background: var(--surface-2);
+}
+.section-summary {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.section-hint {
+  font-size: 11px;
+  flex: none;
+}
+.section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 12px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* Inline "new webhook target" form inside the notification editor */
+.webhook-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.webhook-form .select {
+  background: var(--surface);
+}
+
+/* Target rows in the notification editor: checkbox, Test button, outcome */
+.target-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.target-row .check-row {
+  flex: none;
+}
+.target-test {
+  font-size: 12px;
+  color: var(--muted);
+}
+.target-test.ok {
+  color: var(--good);
+}
+.target-test.fail {
+  color: var(--critical);
+}
