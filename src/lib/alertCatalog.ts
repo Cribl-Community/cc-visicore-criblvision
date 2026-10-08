@@ -5,7 +5,7 @@
 // (Cribl-managed and hybrid groups are covered alike). No recipient is shipped —
 // whoever enables an alert chooses how it is delivered.
 
-import type { CriblNotification, SavedSearch } from '../api/types';
+import type { CriblNotification, NotificationEmailConf, SavedSearch } from '../api/types';
 
 export type Priority = 'P1' | 'P2' | 'P3';
 export const PRIORITIES: Priority[] = ['P1', 'P2', 'P3'];
@@ -29,7 +29,7 @@ function nameWithPriority(label: string, p: Priority | null): string {
   return p ? `${p} - ${base}` : base;
 }
 
-function subjectWithPriority(label: string, p: Priority | null): string {
+export function subjectWithPriority(label: string, p: Priority | null): string {
   const base = stripPriority(label);
   return p ? `[${p}] ${base}` : base;
 }
@@ -549,17 +549,162 @@ Tenant ID: {{tenantId}}
 Search ID: {{savedQueryId}}.
 Notification: {{notificationId}}`;
 
-/** How an enabled alert reaches people; at least one channel must be on. */
-export interface AlertDelivery {
-  /** Post an in-product Cribl system notification. */
-  system: boolean;
-  /** Send an email; omitted means no email. */
-  email?: { to: string; cc?: string };
+// Common schedules, offered as presets next to the raw cron field.
+export const SCHEDULE_PRESETS: { cron: string; label: string }[] = [
+  { cron: '* * * * *', label: 'Every minute' },
+  { cron: '*/5 * * * *', label: 'Every 5 minutes' },
+  { cron: '*/10 * * * *', label: 'Every 10 minutes' },
+  { cron: '*/15 * * * *', label: 'Every 15 minutes' },
+  { cron: '*/30 * * * *', label: 'Every 30 minutes' },
+  { cron: '0 * * * *', label: 'Every hour' },
+  { cron: '0 */6 * * *', label: 'Every 6 hours' },
+  { cron: '0 0 * * *', label: 'Daily at 00:00 UTC' },
+  { cron: '0 8 * * 1-5', label: 'Weekdays at 08:00 UTC' },
+];
+
+export const COMPARATORS: { value: string; label: string }[] = [
+  { value: '>', label: 'greater than' },
+  { value: '>=', label: 'greater than or equal to' },
+  { value: '<', label: 'less than' },
+  { value: '<=', label: 'less than or equal to' },
+  { value: '==', label: 'equal to' },
+  { value: '!=', label: 'not equal to' },
+];
+
+export const ATTACHMENT_TYPES: { value: AttachmentType; label: string }[] = [
+  { value: 'inline', label: 'Inline table' },
+  { value: 'csv', label: 'CSV' },
+  { value: 'json', label: 'JSON' },
+];
+export type AttachmentType = 'inline' | 'csv' | 'json';
+
+/** How an email target delivers the alert. */
+export interface AlertEmail {
+  to: string;
+  cc: string;
+  bcc: string;
+  subject: string;
+  includeResults: boolean;
+  attachmentType: AttachmentType;
+}
+
+/**
+ * Everything the notification attached to an alert can be configured with —
+ * the same options Cribl Search offers on a scheduled search's notification.
+ */
+export interface AlertNotification {
+  /** Fire on the result count, or on a custom expression over the results. */
+  trigger:
+    | { type: 'resultsCount'; comparator: string; count: number }
+    | { type: 'custom'; expression: string };
+  /** Notification-target ids the alert is sent to; at least one is required. */
+  targets: string[];
+  /** Settings for the email (SMTP) targets among `targets`. */
+  email: AlertEmail;
+  /** Message body; Cribl expands {{timestamp}}, {{searchId}} and friends. Empty means Cribl's default. */
+  message: string;
+}
+
+export function sameNotification(a: AlertNotification, b: AlertNotification): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** The shipped defaults for a catalog alert's notification. */
+export function defaultNotification(
+  t: AlertTemplate,
+  priority: Priority,
+  targets: string[],
+  email: Partial<AlertEmail> = {},
+): AlertNotification {
+  return {
+    trigger: { type: 'resultsCount', comparator: '>', count: 0 },
+    targets,
+    email: {
+      to: '',
+      cc: '',
+      bcc: '',
+      includeResults: true,
+      attachmentType: 'inline',
+      ...email,
+      subject: subjectWithPriority(t.name, priority),
+    },
+    message: `${subjectWithPriority(t.name, priority)}\n\n${MESSAGE}`,
+  };
+}
+
+/** The settings a live notification carries, in editable form. */
+export function notificationOf(n: CriblNotification, smtpIds: Set<string>): AlertNotification {
+  const conf = n.conf ?? {};
+  const email = (n.targetConfigs ?? []).find((t) => smtpIds.has(t.id))?.conf;
+  const attachment = String(email?.attachmentType ?? 'inline');
+  return {
+    trigger:
+      conf.triggerType === 'custom'
+        ? { type: 'custom', expression: String(conf.trigger ?? '') }
+        : {
+            type: 'resultsCount',
+            comparator: String(conf.triggerComparator ?? '>'),
+            count: Number(conf.triggerCount ?? 0),
+          },
+    targets: n.targets ?? [],
+    email: {
+      to: email?.emailRecipient?.to ?? '',
+      cc: email?.emailRecipient?.cc ?? '',
+      bcc: email?.emailRecipient?.bcc ?? '',
+      subject: email?.subject ?? '',
+      includeResults: email?.includeResults ?? true,
+      attachmentType: (ATTACHMENT_TYPES.some((a) => a.value === attachment) ? attachment : 'inline') as AttachmentType,
+    },
+    message: typeof conf.message === 'string' ? conf.message : '',
+  };
+}
+
+/** A copy of notification `n` carrying the settings `a`. */
+export function applyNotification(
+  n: CriblNotification,
+  a: AlertNotification,
+  smtpIds: Set<string>,
+): CriblNotification {
+  const { triggerType: _t, triggerComparator: _c, triggerCount: _n, trigger: _x, message: _m, ...rest } = n.conf ?? {};
+  const trigger =
+    a.trigger.type === 'custom'
+      ? { triggerType: 'custom', trigger: a.trigger.expression }
+      : { triggerType: 'resultsCount', triggerComparator: a.trigger.comparator, triggerCount: a.trigger.count };
+  const { to, cc, bcc, subject, includeResults, attachmentType } = a.email;
+  const edited: NotificationEmailConf = {
+    subject,
+    emailRecipient: { to, ...(cc ? { cc } : {}), ...(bcc ? { bcc } : {}) },
+    includeResults,
+    attachmentType,
+  };
+  const existing = new Map((n.targetConfigs ?? []).map((t) => [t.id, t.conf]));
+  // Keep any per-target config Cribl stored for non-email targets.
+  const kept = (n.targetConfigs ?? []).filter((t) => !smtpIds.has(t.id) && a.targets.includes(t.id));
+  return {
+    ...n,
+    targets: a.targets,
+    conf: { ...rest, ...trigger, ...(a.message ? { message: a.message } : {}) },
+    // Email settings the editor does not show (for example a custom body) survive a save.
+    targetConfigs: [
+      ...kept,
+      ...a.targets.filter((id) => smtpIds.has(id)).map((id) => ({ id, conf: { ...(existing.get(id) ?? {}), ...edited } })),
+    ],
+  };
 }
 
 /** The saved search + notification that enabling a catalog alert creates. */
-export function buildAlert(t: AlertTemplate, priority: Priority, delivery: AlertDelivery): SavedSearch {
-  const { email } = delivery;
+export function buildAlert(
+  t: AlertTemplate,
+  priority: Priority,
+  notification: AlertNotification,
+  smtpIds: Set<string>,
+): SavedSearch {
+  const base: CriblNotification = {
+    id: `${t.id}_notification_1`,
+    disabled: false,
+    condition: 'search',
+    conf: { savedQueryId: t.id },
+  };
   return {
     id: t.id,
     name: nameWithPriority(t.name, priority),
@@ -572,37 +717,7 @@ export function buildAlert(t: AlertTemplate, priority: Priority, delivery: Alert
       cronSchedule: t.cron,
       tz: 'UTC',
       keepLastN: 2,
-      notifications: {
-        disabled: false,
-        items: [
-          {
-            id: `${t.id}_notification_1`,
-            disabled: false,
-            condition: 'search',
-            targets: [...(delivery.system ? ['system_notifications'] : []), ...(email ? ['system_email'] : [])],
-            conf: {
-              triggerType: 'resultsCount',
-              triggerComparator: '>',
-              triggerCount: 0,
-              savedQueryId: t.id,
-              message: `${subjectWithPriority(t.name, priority)}\n\n${MESSAGE}`,
-            },
-            targetConfigs: email
-              ? [
-                  {
-                    id: 'system_email',
-                    conf: {
-                      subject: subjectWithPriority(t.name, priority),
-                      emailRecipient: { to: email.to, ...(email.cc ? { cc: email.cc } : {}) },
-                      includeResults: true,
-                      attachmentType: 'inline',
-                    },
-                  },
-                ]
-              : [],
-          },
-        ],
-      },
+      notifications: { disabled: false, items: [applyNotification(base, notification, smtpIds)] },
     },
   };
 }
